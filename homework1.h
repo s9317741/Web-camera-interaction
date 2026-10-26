@@ -1,0 +1,287 @@
+//---------------------------------------------------------------------------
+
+#ifndef homework1H
+#define homework1H
+//---------------------------------------------------------------------------
+#include <System.Classes.hpp>
+#include <Vcl.Controls.hpp>
+#include <Vcl.StdCtrls.hpp>
+#include <Vcl.Forms.hpp>
+#include <Vcl.ExtCtrls.hpp>
+#include <Vcl.Menus.hpp>
+#include <Vcl.ComCtrls.hpp>
+#include <Vcl.Dialogs.hpp>
+#include <Vcl.ExtDlgs.hpp>
+#include <Vcl.Graphics.hpp>
+#include <Vcl.Imaging.pngimage.hpp>
+#include <Vcl.MPlayer.hpp>
+//---------------------------------------------------------------------------
+class TForm1 : public TForm
+{
+__published:	// IDE-managed Components
+	TPanel *pnlDriverDescription;
+	TLabel *lblDriverDescription;
+	TLabel *lblCapDriverName;
+	TLabel *lblCapDriverVersion;
+	TMainMenu *MainMenu1;
+	TMenuItem *WebCam1;
+	TMenuItem *DriverNameVersion1;
+	TMenuItem *On1;
+	TMenuItem *Off1;
+	TMenuItem *CaptureWindow1;
+	TMenuItem *Create1;
+	TMenuItem *Destroy1;
+	TMenuItem *DriverCaptureWindow1;
+	TMenuItem *Connect1;
+	TMenuItem *Disconnect1;
+	TMenuItem *DisplayModePreview1;
+	TMenuItem *Enable1;
+	TMenuItem *Disable1;
+	TMenuItem *PreviewRate1;
+	TMenuItem *N30framesec1;
+	TMenuItem *N15framesec1;
+	TMenuItem *PreviewScale1;
+	TMenuItem *On2;
+	TMenuItem *Off2;
+	TMenuItem *Size1;
+	TMenuItem *N3202401;
+	TMenuItem *N6404801;
+	TPageControl *pcWebcam;
+	TTabSheet *tsCaptureWindow;
+	TTabSheet *tsInformation;
+	TPanel *pnlCaptureWindow;
+	TMenuItem *Dialog1;
+	TLabel *lblDriverIndex;
+	TLabel *lblOverlay;
+	TLabel *lblVideoSourceDialog;
+	TLabel *lblVideoFormatDialog;
+	TLabel *lblVideoDisplayDialog;
+	TLabel *lblDriverReady;
+	TLabel *lblDriverPalette;
+	TMenuItem *miVideoSource;
+	TMenuItem *miVideoFormat;
+	TMenuItem *miVideoDisplay;
+	TMenuItem *miVideoCompression;
+	TMenuItem *Capabilities1;
+	TMenuItem *AutoDisplay1;
+	TLabel *Label1;
+	TLabel *Label2;
+	TLabel *lblImageWidth;
+	TLabel *lblImageHeight;
+	TLabel *lblLiveWindow;
+	TLabel *lblScale;
+	TLabel *lblScroll;
+	TLabel *lblUsingDefaultPalette;
+	TLabel *lblAudioHardware;
+	TLabel *lblCaptureFileExist;
+	TLabel *lblCurrentVideoFrame;
+	TLabel *lblCurrentVideoFrameDropped;
+	TLabel *lblCurrentWaveSamples;
+	TLabel *lblCurrentTimeElapsedMS;
+	TLabel *lblCaptureNow;
+	TLabel *lblReturn;
+	TLabel *lblNumberOfVideoAllocated;
+	TLabel *lblNumberOfAudioAllocated;
+	TMenuItem *Status1;
+	TButton *btnGrabFrame;
+	TButton *btnGrabFrameNoStop;
+	TButton *btnEditCopy;
+	TButton *btnFileSaveDIB;
+	TSavePictureDialog *SavePictureDialog1;
+	TMenuItem *CaptureParameter1;
+	TMenuItem *miGetSe;
+	TTabSheet *tsCaptureParameter;
+	TLabel *Label3;
+	TLabel *lblRequestMicroSecPerFrame;
+	TLabel *lblMakeUserHitOKToCapture;
+	TLabel *lblPercentDropForError;
+	TLabel *lblYield;
+	TLabel *lblIndexSize;
+	TLabel *lblChunkGranularity;
+	TLabel *lblUsingDOSMemory;
+	TLabel *lblNumVideoRequested;
+	TLabel *lblCaptureAudio;
+	TLabel *lblNumAudioRequested;
+	TLabel *lblKeyAbort;
+	TLabel *lblAbortLeftMouse;
+	TLabel *lblAbortRightMouse;
+	TLabel *lblLimitEnabled;
+	TLabel *lblTimeLimit;
+	TLabel *lblMCIControl;
+	TLabel *lblStepMCIDevice;
+	TLabel *lblMCIStartTime;
+	TLabel *lblMCIStopTime;
+	TLabel *lblStepCaptureAt2x;
+	TLabel *lblStepCaptureAverageFrames;
+	TLabel *lblAudioBufferSize;
+	TLabel *lblDisableWriteCache;
+	TLabel *lblAVStreamMaster;
+	TButton *btnSetFilename;
+	TLabel *lblCaptureFilename;
+	TEdit *edFileAlloc;
+	TLabel *Label4;
+	TButton *btnFileAlloc;
+	TButton *btnCaptureSequence;
+	TSaveDialog *SaveDialog1;
+	TLabel *Label5;
+	TLabel *Label6;
+	TMenuItem *Image1;
+	TMenuItem *Vedio1;
+	TMenuItem *PreviewCallbackFunction1;
+	TMenuItem *miFrameCounter;
+	TMenuItem *ColorMode1;
+	TMenuItem *miMirror;
+	TMenuItem *SingleColorObject1;
+	TMenuItem *miColorFiltering;
+	TMenuItem *miOff2;
+	TLabel *lblFrameCounter;
+	TMenuItem *miFormat;
+	TTabSheet *tsVideoFormat;
+	TLabel *Label7;
+	TLabel *Label8;
+	TLabel *lblVideoFormatSize;
+	TLabel *lblSize;
+	TLabel *lblWidth;
+	TLabel *lblHeight;
+	TLabel *lblPlanes;
+	TLabel *lblBitCount;
+	TLabel *lblCompression;
+	TLabel *lblSizeImage;
+	TLabel *lblXPelsPerMeter;
+	TLabel *lblYPelsPerMeter;
+	TLabel *lblColorUsed;
+	TLabel *lblColorImportant;
+	TMenuItem *miGrayMode;
+	TMenuItem *miSelectColor;
+	TColorDialog *ColorDialog1;
+	TMenuItem *miSingleColorObject;
+	TMenuItem *miDragonBall;
+	TMenuItem *miGecko;
+	TMenuItem *N1;
+	TMenuItem *miColor;
+	TImage *imGecko;
+	TImage *imDragonBall0;
+	TImage *imDragonBall1;
+	TImage *imDragonBall2;
+	TImage *imDragonBall3;
+	TImage *imDragonBall4;
+	TImage *imDragonBall5;
+	TImage *imDragonBall6;
+	TMenuItem *miBackground;
+	TMenuItem *miDifferenceDetection;
+	TMenuItem *miSpecificColor;
+	TMenuItem *miSkinColor;
+	TEdit *edMinY;
+	TEdit *edMaxY;
+	TEdit *edMinU;
+	TEdit *edMaxU;
+	TEdit *edMaxV;
+	TEdit *edMinV;
+	TLabel *Label9;
+	TLabel *lY;
+	TLabel *Label11;
+	TTabSheet *tsImage;
+	TImage *imBackground;
+	TMenuItem *miColorMode;
+	TMenuItem *miBinaryMode;
+	TMenuItem *miBlockMode;
+	TLabel *Label10;
+	TEdit *edThreshold;
+	TMenuItem *miInteraction;
+	TMenuItem *miVirtualSpottedGecko;
+	TMenuItem *miPlay;
+	TMenuItem *miReplay;
+	TCheckBox *cbBlockDisplay;
+	TMenuItem *akePicture1;
+	TTabSheet *TabSheet1;
+	TImage *Frame1;
+	TImage *Frame2;
+	TImage *Frame3;
+	TButton *Button1;
+	TButton *Button2;
+	TButton *Button3;
+	TGroupBox *GroupBox1;
+	TGroupBox *GroupBox2;
+	TGroupBox *GroupBox3;
+	TGroupBox *GroupBox4;
+	TGroupBox *GroupBox5;
+	TGroupBox *GroupBox6;
+	TMemo *Memo1;
+	TImage *imCamera;
+	TMediaPlayer *MediaPlayer1;
+	TGroupBox *GroupBox7;
+	void __fastcall On1Click(TObject *Sender);
+	void __fastcall Off1Click(TObject *Sender);
+	void __fastcall Create1Click(TObject *Sender);
+	void __fastcall Destroy1Click(TObject *Sender);
+	void __fastcall Connect1Click(TObject *Sender);
+	void __fastcall Disconnect1Click(TObject *Sender);
+	void __fastcall Enable1Click(TObject *Sender);
+	void __fastcall Disable1Click(TObject *Sender);
+	void __fastcall N30framesec1Click(TObject *Sender);
+	void __fastcall N15framesec1Click(TObject *Sender);
+	void __fastcall On2Click(TObject *Sender);
+	void __fastcall Off2Click(TObject *Sender);
+	void __fastcall N3202401Click(TObject *Sender);
+	void __fastcall N6404801Click(TObject *Sender);
+	void __fastcall Capabilities1Click(TObject *Sender);
+	void __fastcall miVideoSourceClick(TObject *Sender);
+	void __fastcall miVideoFormatClick(TObject *Sender);
+	void __fastcall miVideoDisplayClick(TObject *Sender);
+	void __fastcall miVideoCompressionClick(TObject *Sender);
+	void __fastcall AutoDisplay1Click(TObject *Sender);
+	void __fastcall btnGrabFrameClick(TObject *Sender);
+	void __fastcall btnGrabFrameNoStopClick(TObject *Sender);
+	void __fastcall btnEditCopyClick(TObject *Sender);
+	void __fastcall btnFileSaveDIBClick(TObject *Sender);
+	void __fastcall Status1Click(TObject *Sender);
+	void __fastcall miGetSeClick(TObject *Sender);
+	void __fastcall btnSetFilenameClick(TObject *Sender);
+	void __fastcall edFileAllocChange(TObject *Sender);
+	void __fastcall btnFileAllocClick(TObject *Sender);
+	void __fastcall btnCaptureSequenceClick(TObject *Sender);
+	void __fastcall miFrameCounterClick(TObject *Sender);
+	void __fastcall miFormatClick(TObject *Sender);
+	void __fastcall miOff2Click(TObject *Sender);
+	void __fastcall miGrayModeClick(TObject *Sender);
+	void __fastcall miMirrorClick(TObject *Sender);
+	void __fastcall miSingleColorObjectClick(TObject *Sender);
+	void __fastcall miSelectColorClick(TObject *Sender);
+	void __fastcall miColorClick(TObject *Sender);
+	void __fastcall miGeckoClick(TObject *Sender);
+	void __fastcall miDragonBallClick(TObject *Sender);
+	void __fastcall imDragonBall0Click(TObject *Sender);
+	void __fastcall imDragonBall1Click(TObject *Sender);
+	void __fastcall imDragonBall2Click(TObject *Sender);
+	void __fastcall imDragonBall3Click(TObject *Sender);
+	void __fastcall imDragonBall4Click(TObject *Sender);
+	void __fastcall imDragonBall5Click(TObject *Sender);
+	void __fastcall imDragonBall6Click(TObject *Sender);
+	void __fastcall miSpecificColorClick(TObject *Sender);
+	void __fastcall miSkinColorClick(TObject *Sender);
+	void __fastcall edMaxYChange(TObject *Sender);
+	void __fastcall edMinYChange(TObject *Sender);
+	void __fastcall edMinUChange(TObject *Sender);
+	void __fastcall edMaxUChange(TObject *Sender);
+	void __fastcall edMinVChange(TObject *Sender);
+	void __fastcall edMaxVChange(TObject *Sender);
+	void __fastcall miBackgroundClick(TObject *Sender);
+	void __fastcall miColorModeClick(TObject *Sender);
+	void __fastcall miBinaryModeClick(TObject *Sender);
+	void __fastcall edThresholdChange(TObject *Sender);
+	void __fastcall miBlockModeClick(TObject *Sender);
+	void __fastcall miPlayClick(TObject *Sender);
+	void __fastcall miReplayClick(TObject *Sender);
+	void __fastcall akePicture1Click(TObject *Sender);
+	void __fastcall Button1Click(TObject *Sender);
+	void __fastcall Button2Click(TObject *Sender);
+	void __fastcall Button3Click(TObject *Sender);
+
+private:	// User declarations
+public:		// User declarations
+	__fastcall TForm1(TComponent* Owner);
+};
+//---------------------------------------------------------------------------
+extern PACKAGE TForm1 *Form1;
+//---------------------------------------------------------------------------
+#endif
