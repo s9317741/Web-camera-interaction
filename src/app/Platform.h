@@ -14,6 +14,10 @@ std::filesystem::path executableDir();
 std::filesystem::path pathFromUtf8(const std::string& utf8);
 std::string pathToUtf8(const std::filesystem::path& path);
 
+// The command line as UTF-8. On Windows argv is in the local code page, which
+// cannot hold every file name.
+std::vector<std::string> utf8Arguments(int argc, char** argv);
+
 // Local time as "20261027-153012", for file names.
 std::string timestamp();
 

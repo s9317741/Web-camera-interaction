@@ -28,6 +28,7 @@ public:
 	int width() const { return width_; }
 	int height() const { return height_; }
 	ImTextureID id() const { return static_cast<ImTextureID>(id_); }
+	unsigned int glName() const { return id_; }
 
 	// Largest size that fits the box without changing the aspect ratio.
 	ImVec2 fit(ImVec2 box) const;

@@ -2,7 +2,9 @@
 
 An interactive photo booth for a webcam: an AI cuts you out and puts a new
 or blurred background behind you, stickers follow your face, filters and
-frames dress up the picture, a gecko game reacts to your hand, and pictures
+frames dress up the picture, a gecko game reacts to your hand, your face
+takes the place of the actor's in a video, a friend's face from a video call
+turns up on every actor of a music video and sings along, and pictures
 are taken with a countdown, a wave at an on-screen camera icon, or as a
 four-shot strip. Built with C++17, OpenCV (including its DNN module), and
 Dear ImGui; runs on Windows, Linux, and macOS. The interface is in
@@ -23,6 +25,8 @@ appears in between: press it and step out of view for three seconds.
 | 貼圖 | Stickers that follow your face (sunglasses, party hat, mustache, cat ears, crown), and stickers placed on the picture (gecko, dragon balls, a colored box): drag to move, mouse wheel to resize |
 | 濾鏡 | Looks (beauty, cartoon, sketch, vintage), brightness / contrast / saturation, vignette, mirror, black and white, single color tone, mark skin or a chosen color, frames (simple, instant photo, film) and a date stamp |
 | 抓壁虎 | 30-second game: touch the geckos to catch them. Easy (1 still), normal (2 moving), hard (3 fast); best scores are kept |
+| 當主角 | Play a video with your face on the actor's: it follows them as they move, turn and come closer, matched to their skin tone. Two people in front of the camera cover the two biggest faces. Pause, restart, and take pictures or record as usual; face stickers go on the pasted face. OpenCV reads no sound: an mp3/wav/flac of the same name beside the video (drop both together) plays as its soundtrack, in step with it |
+| 惡搞 | For video calls. Put the other person's face (from the call window, watched live, or a dropped screenshot) on every actor of a video of your choice, so they see themselves lip-syncing to its soundtrack; or paste it onto yours, paste yours onto theirs, or just pull faces. The jaw drops open in time with the music (drop an mp3/wav/flac on the window), and funhouse warps give big eyes, a big mouth, a wide or a long face. F9 starts and stops it all at once (with a video: from the top, with its soundtrack); F10 cycles the warps. See "On a video call" below |
 | 恢復預設 | Switch every effect, sticker, and game off (mirror stays on) |
 | 揮手拍照 | Reach into the camera icon in the bottom-right corner to take a picture |
 | 暫停畫面 | Freeze the picture; 拍照 then saves the frozen picture at once |
@@ -34,9 +38,11 @@ appears in between: press it and step out of view for three seconds.
 standing still next to the icon does not take a picture.
 
 - **Keys:** Space takes a picture, F11 toggles full screen (just the picture
-  and the buttons, for events), Esc leaves full screen.
-- **Your own pictures:** drop image files on the window. Pictures with a
-  transparent background (PNG) become stickers, others become backgrounds.
+  and the buttons, for events), Esc leaves full screen, F9 starts or stops a
+  prank, F10 switches the funhouse warp.
+- **Your own pictures and videos:** drop files on the window. Pictures with
+  a transparent background (PNG) become stickers, other pictures become
+  backgrounds, and videos (mp4, mov, avi, mkv, webm, ...) go to 當主角.
   Copies are kept in `user/` next to the program for next time.
 - **Photos** appear along the bottom; click one to open it, right-click to
   copy it to the clipboard (Windows only) or open its folder. They are saved
@@ -60,6 +66,31 @@ standing still next to the icon does not take a picture.
 - **資訊**: camera format, camera / processing / screen frame rates, time per
   frame, AI time, GPU, and which models are loaded.
 - **紀錄**: the log.
+
+### On a video call
+
+The booth is not a camera itself; OBS passes it on:
+
+1. Under 惡搞, press 開啟輸出視窗（給 OBS）. A window with nothing but the
+   picture opens: no buttons, countdowns or hints, and no camera icon.
+2. In [OBS](https://obsproject.com), add a Window Capture of that window, then
+   press Start Virtual Camera.
+3. In LINE, Meet, Zoom or Teams, pick "OBS Virtual Camera" as the camera.
+
+To borrow the other person's face, pick the call's window under 惡搞 → 對方.
+The booth copies what the screen shows there thirty times a second, so their
+face is live: as they laugh or gasp, so does the face in the video (Windows
+only for now), so keep that window visible, not minimized or
+covered; the biggest face in it is taken. Press 框選 to drag a box round the
+other person on a snapshot of the window: only the box is copied, so your own
+preview (or the rest of a group call) cannot be picked up, a small face is
+found more easily, and copying takes about half as long. The box is kept as
+a part of the window, so it follows the window when it moves or is resized. Elsewhere, or instead, drop a
+screenshot on the booth while 惡搞 is open. A pasted face keeps the expression
+it had, follows the head it is on, and the singing jaw is drawn on top. Until
+their face is found, a video plays as it is.
+
+Only with people who are in on the joke: recordings and photos keep their face.
 
 ### Speed
 
@@ -133,8 +164,8 @@ With Visual Studio 2026 use `-G "Visual Studio 18 2026"`. OpenCV's prebuilt
 package does not know that compiler yet, so the build uses its VS 2019 (vc16)
 binaries, which are compatible.
 
-The OpenCV DLL, the `assets` folder and the models (in `assets/models`) are
-copied next to the executable.
+The OpenCV DLL, its FFmpeg plugin (needed for MP4), the `assets` folder and
+the models (in `assets/models`) are copied next to the executable.
 
 Build Release: background detection is several times slower unoptimized.
 
@@ -142,15 +173,22 @@ Build Release: background detection is several times slower unoptimized.
 
 ```bash
 ./build/WebcamInteraction --self-test              # no window or camera needed
-./build/WebcamInteraction --screenshot ui.png 1    # draw a scene (0-7) to a PNG, hidden window
+./build/WebcamInteraction --screenshot ui.png 1    # draw a scene (0-10) to a PNG, hidden window
+./build/WebcamInteraction --paste-face me.jpg movie.mp4 out.avi  # 當主角 without a camera (or a photo instead of a video)
+./build/WebcamInteraction --paste-face me.jpg me.jpg out.png 0.8 1  # ... with the jaw 80% open and big eyes (warps 0-4)
 ctest --test-dir build -C Release                  # tests for src/core
 ```
 
 The self-test loads every picture and both models, checks OpenCV's YUY2
 conversion against the core's, runs the full picture-taking pipeline, and
 times segmentation, face detection, every look (with and without the GPU),
-frame, and sticker at three sizes. Neither it nor `--screenshot` opens the
-camera or touches `settings.ini`.
+frame, and sticker at three sizes, pastes a face onto a known position,
+plays a short video with a Chinese file name, opens a singing jaw, runs every
+funhouse warp, measures the loudness of a test tone, and (on Windows) copies
+the screen once, in memory only. Neither it nor `--screenshot`
+opens the camera or touches `settings.ini`. `--paste-face` puts the biggest
+face in the first picture over every face in a photo or, frame by frame, a
+video, the way 當主角 does.
 
 The core and its tests need no third-party libraries:
 
@@ -168,6 +206,9 @@ src/app/        the application
   App           the photo booth: pipeline order and the Dear ImGui interface
   Camera        a camera owned by a background thread
   Vision        AI person segmentation and face detection, and the thread they run on
+  Movie         face pasting (with the singing jaw and funhouse warps), and a video player that tracks faces
+  ScreenGrab    copying another window off the screen and finding faces in it (Windows)
+  OutputWindow  the picture alone in a window, for OBS to pass on as a camera
   Style         looks (CPU or GPU), adjustments, frames, date stamp, collage, background compositing
   Stickers      face stickers drawn in code, BGRA overlay
   Sound, Music  synthesized sound effects, music playback (miniaudio)
@@ -180,7 +221,7 @@ assets/images/  pictures for the virtual objects and backgrounds
 ```
 
 Next to the program at run time: `assets/` (pictures and `models/`),
-`captures/` (photos and videos), `user/` (dropped stickers and backgrounds)
+`captures/` (photos and videos), `user/` (dropped stickers, backgrounds and videos)
 and `settings.ini`.
 
 ## History

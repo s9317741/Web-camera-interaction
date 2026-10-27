@@ -53,6 +53,23 @@ std::filesystem::path executableDir()
 #endif
 }
 
+std::vector<std::string> utf8Arguments(int argc, char** argv)
+{
+#if defined(_WIN32)
+	int count = 0;
+	LPWSTR* wide = CommandLineToArgvW(GetCommandLineW(), &count);
+	if (wide != nullptr)
+	{
+		std::vector<std::string> args;
+		for (int i = 0; i < count; ++i)
+			args.push_back(pathToUtf8(std::filesystem::path(wide[i])));
+		LocalFree(wide);
+		return args;
+	}
+#endif
+	return std::vector<std::string>(argv, argv + argc);
+}
+
 std::filesystem::path pathFromUtf8(const std::string& utf8)
 {
 #if defined(_WIN32)

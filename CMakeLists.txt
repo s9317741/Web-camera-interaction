@@ -140,11 +140,17 @@ add_executable(WebcamInteraction
 	src/app/Stickers.cpp
 	src/app/Style.cpp
 	src/app/Vision.cpp
+	src/app/Movie.cpp
 	src/app/Music.cpp
+	src/app/OutputWindow.cpp
 	src/app/Platform.cpp
+	src/app/ScreenGrab.cpp
 	src/app/Texture.cpp
 )
 target_link_libraries(WebcamInteraction PRIVATE webcam_core imgui miniaudio ${OpenCV_LIBS})
+if(WIN32)
+	target_link_libraries(WebcamInteraction PRIVATE dwmapi) # window bounds for screen grabbing
+endif()
 target_compile_definitions(WebcamInteraction PRIVATE
 	WEBCAM_SOURCE_ASSETS="${CMAKE_SOURCE_DIR}/assets")
 webcam_warnings(WebcamInteraction)
@@ -167,4 +173,18 @@ if(WIN32)
 		COMMAND ${CMAKE_COMMAND} -E copy_if_different
 			$<TARGET_RUNTIME_DLLS:WebcamInteraction> $<TARGET_FILE_DIR:WebcamInteraction>
 		COMMAND_EXPAND_LISTS)
+	# OpenCV loads FFmpeg as a plugin at run time, so it is not among the
+	# runtime DLLs above; without it no MP4 can be read or written.
+	list(GET OpenCV_LIBS 0 _opencv_first)
+	get_target_property(_opencv_dll ${_opencv_first} IMPORTED_LOCATION_RELEASE)
+	if(_opencv_dll)
+		get_filename_component(_opencv_bin "${_opencv_dll}" DIRECTORY)
+		file(GLOB _opencv_ffmpeg "${_opencv_bin}/opencv_videoio_ffmpeg*.dll")
+		if(_opencv_ffmpeg)
+			add_custom_command(TARGET WebcamInteraction POST_BUILD
+				COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_opencv_ffmpeg} $<TARGET_FILE_DIR:WebcamInteraction>)
+		else()
+			message(WARNING "OpenCV's FFmpeg plugin was not found in ${_opencv_bin}: MP4 videos will not open")
+		endif()
+	endif()
 endif()

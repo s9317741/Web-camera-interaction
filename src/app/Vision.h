@@ -73,6 +73,7 @@ public:
 		std::uint64_t sequence = 0; // increases with every finished run
 		cv::Mat alpha;              // person probability at the submitted size, or empty
 		std::vector<Face> faces;
+		cv::Mat picture;            // the picture the faces were found in, when faces were asked for
 		double segmentMs = 0.0;
 		double facesMs = 0.0;
 	};

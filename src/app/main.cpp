@@ -1,5 +1,9 @@
 #include "App.h"
 #include "Assets.h"
+#include "Movie.h"
+#include "Music.h"
+#include "OutputWindow.h"
+#include "ScreenGrab.h"
 #include "Platform.h"
 #include "Stickers.h"
 #include "Style.h"
@@ -15,7 +19,9 @@
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
+#include <opencv2/videoio.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -25,10 +31,12 @@
 #include <initializer_list>
 #include <iostream>
 #include <memory>
+#include <thread>
 
 namespace {
 
 const char* const kWindowTitle = "視訊互動拍照亭";
+const char* const kOutputTitle = "拍照亭輸出畫面（給 OBS 擷取）";
 
 void glfwError(int code, const char* description)
 {
@@ -168,6 +176,302 @@ double timeMs(F f, int runs = 10)
 	return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() / runs;
 }
 
+// "當主角": a pasted face lands where it should and nowhere else, and the
+// movie player plays a file with a non-ASCII name, loops, and stops cleanly.
+int selfTestMovie()
+{
+	// A gray face with a dark dot on its nose, put on a plain picture smaller and turned.
+	cv::Mat from(400, 400, CV_8UC3, cv::Scalar(128, 128, 128));
+	cv::circle(from, cv::Point(200, 215), 4, cv::Scalar(0, 0, 0), cv::FILLED);
+	app::Face fromFace;
+	fromFace.eyeLeft = cv::Point2f(175, 190);
+	fromFace.eyeRight = cv::Point2f(225, 190);
+	fromFace.nose = cv::Point2f(200, 215);
+	fromFace.mouth = cv::Point2f(200, 240);
+	const cv::Point2f at(320, 240);
+	const float turn = static_cast<float>(20.0 * CV_PI / 180.0), scale = 0.8f;
+	const auto place = [&](cv::Point2f p) {
+		const cv::Point2f q = (p - fromFace.nose) * scale;
+		return at + cv::Point2f(q.x * std::cos(turn) - q.y * std::sin(turn), q.x * std::sin(turn) + q.y * std::cos(turn));
+	};
+	app::Face onto;
+	onto.eyeLeft = place(fromFace.eyeLeft);
+	onto.eyeRight = place(fromFace.eyeRight);
+	onto.nose = place(fromFace.nose);
+	onto.mouth = place(fromFace.mouth);
+	const cv::Mat plain(480, 640, CV_8UC3, cv::Scalar(90, 140, 200));
+	cv::Mat picture = plain.clone();
+	app::pasteFace(from, fromFace, picture, onto);
+	cv::Mat gray;
+	cv::cvtColor(picture, gray, cv::COLOR_BGR2GRAY);
+	cv::Point darkest;
+	cv::minMaxLoc(gray, nullptr, nullptr, &darkest);
+	const cv::Point2f off = cv::Point2f(darkest) - at;
+	if (std::sqrt(off.x * off.x + off.y * off.y) > 3.0f)
+	{
+		std::cerr << "FAIL pasted nose at " << darkest.x << "," << darkest.y << ", expected near 320,240\n";
+		return 1;
+	}
+	if (cv::norm(picture(cv::Rect(0, 0, 100, 100)), plain(cv::Rect(0, 0, 100, 100)), cv::NORM_INF) != 0.0)
+	{
+		std::cerr << "FAIL pasting a face changed pixels far from it\n";
+		return 1;
+	}
+	app::Face tiny = onto;
+	tiny.eyeRight = tiny.eyeLeft + cv::Point2f(3, 0);
+	cv::Mat untouched = plain.clone();
+	app::pasteFace(from, fromFace, untouched, tiny);
+	if (cv::norm(untouched, plain, cv::NORM_INF) != 0.0)
+	{
+		std::cerr << "FAIL a face too small to place was pasted anyway\n";
+		return 1;
+	}
+	std::cout << "ok   pasted face lands on the face, turned and scaled\n";
+
+	// A ten-frame video, played from a file with a Chinese name.
+	const std::filesystem::path dir = app::executableDir();
+	const std::filesystem::path ascii = dir / "self-test-movie.avi";
+	const std::filesystem::path named = dir / app::pathFromUtf8("自我測試影片.avi");
+	std::error_code ec;
+	const auto cleanUp = [&] {
+		std::filesystem::remove(ascii, ec);
+		std::filesystem::remove(named, ec);
+	};
+	{
+		cv::VideoWriter writer(app::pathToUtf8(ascii), cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), 30.0, cv::Size(160, 120));
+		if (!writer.isOpened())
+		{
+			std::cerr << "FAIL cannot write a test video to " << app::pathToUtf8(dir) << "\n";
+			return 1;
+		}
+		for (int i = 0; i < 10; ++i)
+			writer.write(cv::Mat(120, 160, CV_8UC3, cv::Scalar(i * 20, 100, 200)));
+	}
+	std::filesystem::copy_file(ascii, named, std::filesystem::copy_options::overwrite_existing, ec);
+	if (app::MoviePlayer::firstFrame(named).empty())
+	{
+		cleanUp();
+		std::cerr << "FAIL cannot read a video with a non-ASCII file name\n";
+		return 1;
+	}
+	app::MoviePlayer player;
+	player.open(named);
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+	app::MoviePlayer::Frame frame;
+	while (std::chrono::steady_clock::now() < deadline && !player.failed())
+	{
+		frame = player.latest();
+		if (frame.sequence >= 25) // through the end and around again
+			break;
+		std::this_thread::sleep_for(std::chrono::milliseconds(20));
+	}
+	const bool failed = player.failed();
+	player.close();
+	cleanUp();
+	if (failed || frame.sequence < 25 || frame.bgr.size() != cv::Size(160, 120))
+	{
+		std::cerr << "FAIL movie player: " << (failed ? "could not play" : "stopped") << " after " << frame.sequence
+			<< " frames\n";
+		return 1;
+	}
+	std::cout << "ok   movie player plays, loops, and reads non-ASCII file names\n";
+	return 0;
+}
+
+// "惡搞": the singing jaw and the funhouse warps, music loudness, and copying
+// the screen (in memory only; nothing is saved).
+int selfTestPrank()
+{
+	const cv::Mat skin(400, 400, CV_8UC3, cv::Scalar(150, 170, 210));
+	app::Face face;
+	face.eyeLeft = cv::Point2f(170, 180);
+	face.eyeRight = cv::Point2f(230, 180);
+	face.nose = cv::Point2f(200, 215);
+	face.mouth = cv::Point2f(200, 250);
+	app::PasteStyle sing;
+	sing.jaw = 1.0f;
+	sing.recolor = false;
+	cv::Mat singing = skin.clone();
+	app::pasteFace(skin, face, singing, face, sing);
+	// Fully open, the jaw drops half the eye distance (30 pixels): the mouth is the gap.
+	const cv::Vec3b mouth = singing.at<cv::Vec3b>(250 + 15, 200);
+	const cv::Vec3b above = singing.at<cv::Vec3b>(200, 200);
+	if (mouth[0] + mouth[1] + mouth[2] > 250 || cv::norm(cv::Vec3d(above) - cv::Vec3d(skin.at<cv::Vec3b>(200, 200))) > 10.0)
+	{
+		std::cerr << "FAIL the singing jaw did not open a mouth below the lips\n";
+		return 1;
+	}
+	for (int warp = 1; warp < static_cast<int>(app::Warp::Count); ++warp)
+	{
+		cv::Mat pulled = skin.clone();
+		cv::circle(pulled, cv::Point(170, 180), 5, cv::Scalar(20, 20, 20), cv::FILLED); // an eye
+		cv::circle(pulled, cv::Point(200, 250), 5, cv::Scalar(20, 20, 20), cv::FILLED); // the mouth
+		const cv::Mat before = pulled.clone();
+		app::PasteStyle style;
+		style.warp = static_cast<app::Warp>(warp);
+		style.recolor = false;
+		app::pasteFace(before, face, pulled, face, style);
+		if (pulled.size() != skin.size() ||
+			cv::norm(pulled(cv::Rect(0, 0, 40, 40)), before(cv::Rect(0, 0, 40, 40)), cv::NORM_INF) != 0.0 ||
+			cv::norm(pulled, before, cv::NORM_INF) == 0.0)
+		{
+			std::cerr << "FAIL funhouse warp " << warp << " changed nothing, or changed more than the face\n";
+			return 1;
+		}
+	}
+	std::cout << "ok   singing jaw and funhouse warps\n";
+
+	// Half a second of silence, then half a second of a loud tone.
+	const std::filesystem::path wav = app::executableDir() / "self-test-loudness.wav";
+	{
+		const int rate = 8000, samples = rate;
+		std::vector<unsigned char> bytes;
+		const auto put = [&bytes](std::uint32_t value, int size) {
+			for (int i = 0; i < size; ++i)
+				bytes.push_back(static_cast<unsigned char>((value >> (8 * i)) & 0xFF));
+		};
+		const auto tag = [&bytes](const char* text) { bytes.insert(bytes.end(), text, text + 4); };
+		tag("RIFF");
+		put(36 + samples * 2, 4);
+		tag("WAVE");
+		tag("fmt ");
+		put(16, 4);
+		put(1, 2); // PCM
+		put(1, 2); // mono
+		put(rate, 4);
+		put(rate * 2, 4);
+		put(2, 2);
+		put(16, 2);
+		tag("data");
+		put(samples * 2, 4);
+		for (int i = 0; i < samples; ++i)
+		{
+			const double tone = i < samples / 2 ? 0.0 : 20000.0 * std::sin(2.0 * CV_PI * 440.0 * i / rate);
+			put(static_cast<std::uint32_t>(static_cast<std::int16_t>(tone)) & 0xFFFF, 2);
+		}
+		if (!app::writeFile(wav, bytes))
+		{
+			std::cerr << "FAIL cannot write a test sound to " << app::pathToUtf8(wav) << "\n";
+			return 1;
+		}
+	}
+	const std::vector<float> levels = app::Music::loudness(wav);
+	std::error_code ec;
+	std::filesystem::remove(wav, ec);
+	if (levels.size() < 45 || levels[10] > 0.05f || levels[40] < 0.8f)
+	{
+		std::cerr << "FAIL music loudness: " << levels.size() << " values\n";
+		return 1;
+	}
+	std::cout << "ok   music loudness, " << app::Music::kLevelRate << " values a second\n";
+
+	if (app::screenGrabSupported())
+	{
+		cv::Mat screen, piece;
+		const cv::Rect2f box(0.4f, 0.3f, 0.2f, 0.3f); // a call tile's worth
+		if (app::grabScreenWindow(0, screen) && app::grabScreenWindow(0, piece, box))
+			std::printf("ok   screen copy %dx%d in %.1f ms, a %dx%d box of it in %.1f ms; %d other windows to pick from\n",
+				screen.cols, screen.rows, timeMs([&] { app::grabScreenWindow(0, screen); }, 10), piece.cols, piece.rows,
+				timeMs([&] { app::grabScreenWindow(0, piece, box); }, 10), static_cast<int>(app::listScreenWindows().size()));
+		else
+			std::cout << "skip screen copy (no desktop to copy from)\n";
+	}
+	return 0;
+}
+
+// --paste-face: the biggest face in one picture over every face in another,
+// as "當主角" does with each video frame. For checking how a paste looks.
+int pasteFaceTool(const app::Assets& assets, const char* fromFile, const char* ontoFile, const char* outFile,
+	const app::PasteStyle& style)
+{
+	app::FaceTracker tracker;
+	std::string error;
+	if (!tracker.load(assets.root() / "models" / "face_detection_yunet_2023mar.onnx", error))
+	{
+		std::cerr << error << "\n";
+		return 1;
+	}
+	const auto load = [](const char* file) {
+		std::vector<unsigned char> bytes;
+		return app::readFile(app::pathFromUtf8(file), bytes) ? cv::imdecode(bytes, cv::IMREAD_COLOR) : cv::Mat();
+	};
+	const cv::Mat from = load(fromFile);
+	cv::Mat onto = load(ontoFile);
+	if (from.empty())
+	{
+		std::cerr << "Cannot read " << fromFile << "\n";
+		return 1;
+	}
+	const std::vector<app::Face> people = tracker.detect(from);
+	if (onto.empty())
+	{
+		// A video: played once through the movie player, as in the booth,
+		// and written out as Motion JPEG with the face pasted in.
+		const std::vector<std::pair<int, int>> self = app::pairFaces(people, people);
+		app::MoviePlayer player;
+		if (self.empty() || !player.loadFaceTracker(assets.root() / "models" / "face_detection_yunet_2023mar.onnx", error))
+		{
+			std::cerr << (self.empty() ? std::string("No face in ") + fromFile : error) << "\n";
+			return 1;
+		}
+		const app::Face& face = people[self.front().first];
+		player.open(app::pathFromUtf8(ontoFile));
+		cv::VideoWriter writer;
+		std::uint64_t seen = 0;
+		int frames = 0, pasted = 0;
+		double last = 0.0;
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(10);
+		while (!player.failed() && std::chrono::steady_clock::now() < deadline)
+		{
+			const app::MoviePlayer::Frame frame = player.latest();
+			if (frame.sequence == seen)
+			{
+				std::this_thread::sleep_for(std::chrono::milliseconds(2));
+				continue;
+			}
+			if (player.seconds() + 1e-6 < last) // back at the start: once through is enough
+				break;
+			last = player.seconds();
+			seen = frame.sequence;
+			cv::Mat picture = frame.bgr.clone();
+			for (const app::Face& actor : frame.faces)
+				app::pasteFace(from, face, picture, actor, style);
+			pasted += frame.faces.empty() ? 0 : 1;
+			if (!writer.isOpened() &&
+				!writer.open(app::pathToUtf8(app::pathFromUtf8(outFile)), cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), 30.0,
+					picture.size()))
+			{
+				std::cerr << "Cannot write " << outFile << "\n";
+				return 1;
+			}
+			writer.write(picture);
+			++frames;
+		}
+		if (player.failed())
+		{
+			std::cerr << "Cannot play " << ontoFile << "\n";
+			return 1;
+		}
+		std::cout << "pasted into " << pasted << " of " << frames << " frames, saved " << outFile << "\n";
+		return 0;
+	}
+	const std::vector<app::Face> actors = tracker.detect(onto);
+	std::cout << people.size() << " face(s) in " << fromFile << ", " << actors.size() << " in " << ontoFile << "\n";
+	const std::vector<std::pair<int, int>> biggest = app::pairFaces(people, actors);
+	if (biggest.empty())
+		return 1;
+	for (const app::Face& actor : actors)
+		app::pasteFace(from, people[biggest.front().first], onto, actor, style);
+	std::vector<unsigned char> png;
+	if (!cv::imencode(".png", onto, png) || !app::writeFile(app::pathFromUtf8(outFile), png))
+	{
+		std::cerr << "Cannot write " << outFile << "\n";
+		return 1;
+	}
+	std::cout << "saved " << outFile << "\n";
+	return 0;
+}
+
 // The OpenCV parts of the app: AI models, looks, frames, stickers, collage.
 int selfTestOpenCv(const app::Assets& assets)
 {
@@ -264,7 +568,9 @@ int selfTestOpenCv(const app::Assets& assets)
 		return 1;
 	}
 	std::cout << "ok   looks, frames, face stickers, four-shot collage" << std::endl;
-	return 0;
+	if (selfTestMovie() != 0)
+		return 1;
+	return selfTestPrank();
 }
 
 // Runs every effect on a synthetic scene at each supported size, without a
@@ -394,14 +700,27 @@ int main(int argc, char** argv)
 	}
 	const app::Assets assets(assetDir);
 
-	if (argc > 1 && std::strcmp(argv[1], "--self-test") == 0)
+	const std::vector<std::string> args = app::utf8Arguments(argc, argv);
+	if (args.size() > 1 && args[1] == "--self-test")
 		return selfTest(assets);
+	// --paste-face <from> <onto> <out.png> [jaw 0..1] [warp 0..4]
+	if (args.size() > 4 && args[1] == "--paste-face")
+	{
+		// Then optionally how far the jaw is open (0..1) and a warp (0 none, 1 big eyes, 2 big mouth, 3 wide, 4 long).
+		app::PasteStyle style;
+		if (args.size() > 5)
+			style.jaw = static_cast<float>(std::atof(args[5].c_str()));
+		if (args.size() > 6)
+			style.warp = static_cast<app::Warp>(
+				std::clamp(std::atoi(args[6].c_str()), 0, static_cast<int>(app::Warp::Count) - 1));
+		return pasteFaceTool(assets, args[2].c_str(), args[3].c_str(), args[4].c_str(), style);
+	}
 
 	// --screenshot <file.png> [scene]: draws the window hidden, saves it, and
 	// exits. A still picture stands in for the camera (see App::stageScreenshot).
-	const bool screenshot = argc > 2 && std::strcmp(argv[1], "--screenshot") == 0;
-	const std::filesystem::path screenshotFile = screenshot ? app::pathFromUtf8(argv[2]) : std::filesystem::path();
-	const int screenshotTab = argc > 3 ? std::atoi(argv[3]) : 0;
+	const bool screenshot = args.size() > 2 && args[1] == "--screenshot";
+	const std::filesystem::path screenshotFile = screenshot ? app::pathFromUtf8(args[2]) : std::filesystem::path();
+	const int screenshotTab = args.size() > 3 ? std::atoi(args[3].c_str()) : 0;
 
 	std::srand(static_cast<unsigned>(std::time(nullptr)));
 	glfwSetErrorCallback(glfwError);
@@ -485,11 +804,18 @@ int main(int argc, char** argv)
 			glfwSetWindowMonitor(window, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
 		});
 
+		// The picture alone, for OBS to pass on to a video call.
+		app::OutputWindow output;
+		bool outputWanted = false;
+		application.setOutputWindowHandler([&outputWanted](bool open) { outputWanted = open; });
+
 		int frame = 0;
 		while (!glfwWindowShouldClose(window))
 		{
 			glfwPollEvents();
-			if (glfwGetWindowAttrib(window, GLFW_ICONIFIED) != 0)
+			// Minimized, the booth keeps going only while the output window needs it.
+			const bool iconified = glfwGetWindowAttrib(window, GLFW_ICONIFIED) != 0;
+			if (iconified && !output.isOpen())
 			{
 				ImGui_ImplGlfw_Sleep(10);
 				continue;
@@ -521,7 +847,27 @@ int main(int argc, char** argv)
 				break;
 			}
 			glfwSwapBuffers(window);
+
+			if (outputWanted && !output.isOpen() && !output.open(window, kOutputTitle))
+			{
+				outputWanted = false;
+				application.outputWindowClosed();
+			}
+			if (output.closeRequested() || (!outputWanted && output.isOpen()))
+			{
+				output.close();
+				outputWanted = false;
+				application.outputWindowClosed();
+			}
+			if (output.isOpen())
+			{
+				const app::Texture& picture = application.picture();
+				output.present(picture.glName(), picture.width(), picture.height());
+			}
+			if (iconified)
+				ImGui_ImplGlfw_Sleep(8); // nothing waits for the screen while minimized
 		}
+		output.close();
 		glfwSetDropCallback(window, nullptr);
 		glfwSetWindowUserPointer(window, nullptr);
 	}

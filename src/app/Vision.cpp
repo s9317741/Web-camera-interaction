@@ -208,6 +208,7 @@ void AiWorker::run()
 		{
 			const Clock::time_point start = Clock::now();
 			next.faces = faceTracker_.detect(picture);
+			next.picture = picture; // the next swap moves on to a new buffer, so this one stays as it is
 			next.facesMs = std::chrono::duration<double, std::milli>(Clock::now() - start).count();
 		}
 

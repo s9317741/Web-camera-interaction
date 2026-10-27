@@ -7,6 +7,7 @@
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
@@ -142,6 +143,33 @@ cv::Mat decodeImage(const std::filesystem::path& file)
 	return cv::imdecode(bytes, cv::IMREAD_UNCHANGED);
 }
 
+// By name only: whether OpenCV can read it shows when it is opened.
+bool isVideoFile(const std::filesystem::path& file)
+{
+	std::string ext = file.extension().string();
+	std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+	const char* videos[] = { ".mp4", ".m4v", ".mov", ".avi", ".mkv", ".webm", ".wmv", ".mpg", ".mpeg", ".gif" };
+	return std::find(std::begin(videos), std::end(videos), ext) != std::end(videos);
+}
+
+// What the music player can open (miniaudio's built-in decoders).
+bool isAudioFile(const std::filesystem::path& file)
+{
+	std::string ext = file.extension().string();
+	std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+	return ext == ".mp3" || ext == ".wav" || ext == ".flac";
+}
+
+// Index of the biggest face, or -1.
+int biggestFace(const std::vector<Face>& faces)
+{
+	int best = -1;
+	for (int i = 0; i < static_cast<int>(faces.size()); ++i)
+		if (best < 0 || faces[i].eyeDistance() > faces[best].eyeDistance())
+			best = i;
+	return best;
+}
+
 bool hasTransparency(const cv::Mat& image)
 {
 	if (image.channels() != 4)
@@ -245,6 +273,9 @@ App::App(const Assets& assets, UiFonts fonts, bool persistent) : fonts_(fonts), 
 		log("Person segmentation is off: " + error);
 	if (!ai_.loadFaceTracker(assets.root() / "models" / "face_detection_yunet_2023mar.onnx", error))
 		log("Face stickers are off: " + error);
+	else if (!movie_.loadFaceTracker(assets.root() / "models" / "face_detection_yunet_2023mar.onnx", error) ||
+		!grabber_.loadFaceTracker(assets.root() / "models" / "face_detection_yunet_2023mar.onnx", error))
+		log("Starring in a video and pranks are off: " + error);
 	fpsWindow_ = Clock::now();
 	cutOut_ = ai_.segmenterReady() ? CutOut::Ai : CutOut::Difference;
 
@@ -380,6 +411,28 @@ bool App::addSticker(const std::string& name, const cv::Mat& bgra)
 	return true;
 }
 
+bool App::addClip(const std::string& name, const std::filesystem::path& file)
+{
+	const cv::Mat first = MoviePlayer::firstFrame(file);
+	if (first.empty())
+		return false;
+	Clip clip;
+	clip.name = name;
+	clip.file = file;
+	// OpenCV reads no sound, so a video's soundtrack is a file of the same name beside it.
+	std::error_code ec;
+	for (const char* ext : { ".mp3", ".wav", ".flac", ".MP3", ".WAV", ".FLAC" })
+	{
+		std::filesystem::path audio = file;
+		audio.replace_extension(ext);
+		if (clip.audio.empty() && std::filesystem::exists(audio, ec))
+			clip.audio = audio;
+	}
+	uploadThumbnail(clip.thumbnail, first, 160);
+	clips_.push_back(std::move(clip));
+	return true;
+}
+
 void App::refreshBoxSticker()
 {
 	cv::Mat box(50, 200, CV_8UC4, cv::Scalar(boxColor_[2] * 255.0f, boxColor_[1] * 255.0f, boxColor_[0] * 255.0f, 255));
@@ -389,12 +442,17 @@ void App::refreshBoxSticker()
 
 void App::loadUserPictures()
 {
-	// Pictures dropped on the window earlier.
+	// Pictures and videos dropped on the window earlier.
+	std::error_code ec;
+	const std::filesystem::path videos = home_ / "user" / "videos";
+	if (std::filesystem::is_directory(videos, ec))
+		for (const auto& entry : std::filesystem::directory_iterator(videos, ec))
+			if (isVideoFile(entry.path()))
+				addClip(pathToUtf8(entry.path().filename()), entry.path());
 	const char* folders[] = { "backgrounds", "stickers" };
 	for (int kind = 0; kind < 2; ++kind)
 	{
 		const std::filesystem::path dir = home_ / "user" / folders[kind];
-		std::error_code ec;
 		if (!std::filesystem::is_directory(dir, ec))
 			continue;
 		for (const auto& entry : std::filesystem::directory_iterator(dir, ec))
@@ -415,23 +473,83 @@ void App::loadUserPictures()
 void App::onDrop(const std::vector<std::filesystem::path>& files)
 {
 	int added = 0;
-	for (const std::filesystem::path& file : files)
-	{
-		const cv::Mat image = decodeImage(file);
-		if (image.empty())
-		{
-			toast("不是圖片：" + pathToUtf8(file.filename()));
-			continue;
-		}
-		const bool sticker = hasTransparency(image);
-		const std::filesystem::path dir = home_ / "user" / (sticker ? "stickers" : "backgrounds");
+	// Where a copy goes, under a name not taken yet.
+	const auto keep = [this](const std::filesystem::path& file, const char* folder) {
+		const std::filesystem::path dir = home_ / "user" / folder;
 		std::error_code ec;
 		std::filesystem::create_directories(dir, ec);
 		std::filesystem::path copy = dir / file.filename();
 		for (int i = 2; std::filesystem::exists(copy, ec); ++i)
-			copy = dir / (file.stem().string() + "-" + std::to_string(i) + file.extension().string());
+			copy = dir / (file.stem().native() + pathFromUtf8("-" + std::to_string(i)).native() + file.extension().native());
 		if (persistent_)
 			std::filesystem::copy_file(file, copy, ec);
+		return copy;
+	};
+	// A video and its soundtrack dropped together: the sound is kept beside the
+	// video (before the video is added, which looks for it).
+	std::vector<std::filesystem::path> ordered = files;
+	std::stable_partition(ordered.begin(), ordered.end(), isAudioFile);
+	const auto soundtrackOf = [&files](const std::filesystem::path& audio) {
+		return std::any_of(files.begin(), files.end(), [&audio](const std::filesystem::path& file) {
+			return isVideoFile(file) && file.stem() == audio.stem();
+		});
+	};
+	for (const std::filesystem::path& file : ordered)
+	{
+		if (isAudioFile(file) && soundtrackOf(file))
+		{
+			keep(file, "videos");
+			++added;
+			continue;
+		}
+		if (isAudioFile(file))
+		{
+			std::string error;
+			if (!music_.load(file, error))
+			{
+				toast("打不開這個音樂檔：" + pathToUtf8(file.filename()));
+				continue;
+			}
+			std::snprintf(musicPath_, sizeof(musicPath_), "%s", pathToUtf8(file).c_str());
+			music_.setVolume(volume_);
+			music_.setLooping(loop_);
+			++added;
+			toast("音樂換成：" + pathToUtf8(file.filename()));
+			continue;
+		}
+		if (isVideoFile(file))
+		{
+			const std::filesystem::path copy = keep(file, "videos");
+			std::error_code ec;
+			const std::string name = pathToUtf8(copy.filename());
+			if (!addClip(name, persistent_ && std::filesystem::exists(copy, ec) ? copy : file))
+			{
+				toast("打不開這部影片：" + pathToUtf8(file.filename()));
+				continue;
+			}
+			++added;
+			drawer_ = Drawer::Movie;
+			startMovie(static_cast<int>(clips_.size()) - 1);
+			toast("已加入影片：" + name);
+			continue;
+		}
+		const cv::Mat image = decodeImage(file);
+		if (image.empty())
+		{
+			toast("不是圖片或影片：" + pathToUtf8(file.filename()));
+			continue;
+		}
+		const bool sticker = hasTransparency(image);
+		if (drawer_ == Drawer::Prank && !sticker)
+		{
+			// A screenshot of the other person, where their window cannot be watched.
+			grabber_.show(toBgr8(image));
+			windowIndex_ = -1;
+			++added;
+			toast("改用這張圖裡的臉");
+			continue;
+		}
+		const std::filesystem::path copy = keep(file, sticker ? "stickers" : "backgrounds");
 		const std::string name = pathToUtf8(copy.filename());
 		if (sticker ? addSticker(name, image) : addBackground(name, image))
 		{
@@ -449,7 +567,7 @@ void App::onDrop(const std::vector<std::filesystem::path>& files)
 		}
 	}
 	if (added == 0 && !files.empty())
-		toast("沒有可以用的圖片");
+		toast("沒有可以用的圖片或影片");
 }
 
 bool App::aiTouch() const
@@ -564,6 +682,95 @@ void App::stageScreenshot(int scene, const cv::Mat& room, const cv::Mat& person,
 		fourShots_.push_back(person);
 		shootAt_ = Clock::now() + std::chrono::seconds(2);
 	}
+	if (scene == 8)
+	{
+		frameStyle_ = FrameStyle::None;
+		dateStamp_ = false;
+		backgroundMode_ = BackgroundMode::Off;
+		placed_[0].on = false;
+		faceSticker_ = FaceStickers::kCrown;
+		stageClip(room, person, personMask);
+		drawer_ = Drawer::Movie;
+		processFrame(stagedFrame_);
+	}
+	if (scene == 9 || scene == 10)
+	{
+		// Their face, mid-song with big eyes, on the actor of a video. The
+		// "other person" is the same figure, unmirrored, given eyes to show the warp.
+		frameStyle_ = FrameStyle::None;
+		dateStamp_ = false;
+		backgroundMode_ = BackgroundMode::Off;
+		placed_[0].on = false;
+		faceSticker_ = -1;
+		stageClip(room, person, personMask);
+		stagedTheirs_.bgr = person.clone();
+		Face theirs;
+		theirs.eyeLeft = cv::Point2f(530.0f, 235.0f);
+		theirs.eyeRight = cv::Point2f(590.0f, 235.0f);
+		theirs.nose = cv::Point2f(560.0f, 270.0f);
+		theirs.mouth = cv::Point2f(560.0f, 300.0f);
+		for (const cv::Point2f eye : { theirs.eyeLeft, theirs.eyeRight })
+		{
+			cv::circle(stagedTheirs_.bgr, eye, 9, cv::Scalar(255, 255, 255), cv::FILLED, cv::LINE_AA);
+			cv::circle(stagedTheirs_.bgr, eye, 5, cv::Scalar(40, 30, 20), cv::FILLED, cv::LINE_AA);
+		}
+		stagedTheirs_.faces = { theirs };
+		ScreenWindow call;
+		call.handle = 1;
+		call.title = "LINE - 視訊通話";
+		windows_ = { ScreenWindow(), call };
+		windows_[0].title = "整個主螢幕";
+		windowIndex_ = 1;
+		prankMode_ = PrankMode::TheirFaceOnVideo;
+		singAlong_ = true;
+		warp_ = Warp::BigEyes;
+		prankOn_ = true;
+		drawer_ = Drawer::Prank;
+		toast_.clear();
+		processFrame(stagedFrame_);
+	}
+	if (scene == 10)
+	{
+		// A call window: them large, me small in the corner; the box round them.
+		cv::Mat call(720, 1280, CV_8UC3, cv::Scalar(40, 36, 34));
+		cv::resize(stagedTheirs_.bgr, call(cv::Rect(40, 40, 800, 600)), cv::Size(800, 600));
+		cv::resize(person, call(cv::Rect(900, 440, 320, 240)), cv::Size(320, 240));
+		regionShot_.upload(call);
+		regionWindow_ = 1;
+		regionFrom_ = cv::Point2f(260.0f / 1280.0f, 60.0f / 720.0f);
+		regionTo_ = cv::Point2f(640.0f / 1280.0f, 420.0f / 720.0f);
+		openRegion_ = true;
+	}
+}
+
+// A "video" for the screenshots: the room with the figure standing at the
+// side, larger, as its actor.
+void App::stageClip(const cv::Mat& room, const cv::Mat& person, const cv::Mat& personMask)
+{
+	cv::resize(room, stagedMovie_, cv::Size(1280, 720));
+	const float scale = 1.3f;
+	const cv::Point2f shift(-300.0f, -120.0f);
+	cv::Mat figure, mask;
+	cv::resize(person, figure, cv::Size(), scale, scale);
+	cv::resize(personMask, mask, cv::Size(), scale, scale);
+	const cv::Rect into = cv::Rect(static_cast<int>(shift.x), static_cast<int>(shift.y), figure.cols, figure.rows) &
+		cv::Rect(0, 0, stagedMovie_.cols, stagedMovie_.rows);
+	const cv::Rect from = into - cv::Point(static_cast<int>(shift.x), static_cast<int>(shift.y));
+	figure(from).copyTo(stagedMovie_(into), mask(from) > 128);
+	const auto place = [&](float x, float y) { return cv::Point2f(x * scale + shift.x, y * scale + shift.y); };
+	Face actor;
+	actor.eyeLeft = place(530.0f, 235.0f);
+	actor.eyeRight = place(590.0f, 235.0f);
+	actor.nose = place(560.0f, 270.0f);
+	actor.mouth = place(560.0f, 300.0f);
+	actor.box = cv::Rect2f(place(490.0f, 160.0f), cv::Size2f(140.0f * scale, 180.0f * scale));
+	stagedMovieFaces_ = { actor };
+	Clip clip;
+	clip.name = "示範影片.mp4";
+	clip.audio = pathFromUtf8("示範影片.mp3");
+	uploadThumbnail(clip.thumbnail, stagedMovie_, 160);
+	clips_.push_back(std::move(clip));
+	clipIndex_ = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -596,7 +803,8 @@ void App::syncEffects()
 		geckos_[i].effect->setShowBlocks(showBlocks_ && i == 0);
 		set(geckos_[i].effect, game_ == GameState::Playing && touchReady && i < geckos);
 	}
-	set(photoTrigger_, wavePhoto_ && touchReady && fourShot_ < 0);
+	// Not while the picture goes out to a video call: the icon would give the booth away.
+	set(photoTrigger_, wavePhoto_ && touchReady && fourShot_ < 0 && !outputOpen_);
 	if (debugView_ > 0)
 		difference_->setMode(static_cast<webcam::DifferenceViewEffect::Mode>(debugView_ - 1));
 	set(difference_, debugView_ > 0);
@@ -632,11 +840,12 @@ void App::processFrame(const cv::Mat& frame)
 		input.copyTo(mirrored_);
 	cv::Mat picture = mirrored_.clone();
 
-	// 1. Where the person is, from the AI.
+	// 1. Where the person is, from the AI. A video needs only the faces.
+	const bool movie = movieOn();
 	const bool aiCutOut = backgroundMode_ != BackgroundMode::Off && cutOut_ == CutOut::Ai;
 	const bool wantTouch = (wavePhoto_ && fourShot_ < 0) || game_ == GameState::Playing || debugView_ > 0;
-	const bool wantMask = ai_.segmenterReady() && (aiCutOut || wantTouch);
-	const bool wantFaces = faceSticker_ >= 0 && ai_.faceTrackerReady();
+	const bool wantMask = ai_.segmenterReady() && (aiCutOut || wantTouch) && !movie;
+	const bool wantFaces = (faceSticker_ >= 0 || movie || prankOn_) && ai_.faceTrackerReady();
 	bool haveMask = false;
 	bool newMask = false;
 	if (staged_)
@@ -647,6 +856,7 @@ void App::processFrame(const cv::Mat& frame)
 			haveMask = newMask = true;
 		}
 		faces_ = stagedFaces_;
+		facePicture_ = mirrored_;
 	}
 	else if (wantMask || wantFaces)
 	{
@@ -661,7 +871,10 @@ void App::processFrame(const cv::Mat& frame)
 			haveMask = true;
 		}
 		if (wantFaces)
+		{
 			faces_ = result.faces;
+			facePicture_ = result.picture;
+		}
 		aiMs_ = result.segmentMs + result.facesMs;
 	}
 	// Touching means moving into a place: person now, not a moment ago. A body
@@ -691,43 +904,80 @@ void App::processFrame(const cv::Mat& frame)
 		effects_.setExternalDetection(webcam::Detection());
 	}
 
-	// 2. A new or blurred background.
-	if (haveMask && aiCutOut)
-	{
-		if (backgroundMode_ == BackgroundMode::Blur)
-			styler_.blurBackground(picture, personAlpha_);
-		else
-			styler_.replaceBackground(picture, personAlpha_,
-				backgrounds_[std::min<std::size_t>(backgroundIndex_, backgrounds_.size() - 1)].bgr);
-	}
+	// The music's loudness drives the singing jaw: open at once on a beat,
+	// closing a little slower.
+	const float level = prankOn_ && singAlong_ ? (staged_ ? 0.9f : music_.level()) : 0.0f;
+	jaw_ = level > jaw_ ? level : jaw_ * 0.75f + level * 0.25f;
 
-	// 3. The core: per-pixel filters, the game, the camera icon.
-	syncEffects();
-	yuy2_.resize(webcam::Yuy2Frame::bytesFor(frameWidth_, frameHeight_));
-	webcam::Yuy2Frame yuy2Frame;
-	yuy2Frame.wrap(yuy2_.data(), yuy2_.size(), frameWidth_, frameHeight_);
-	// Same result as Yuy2Frame::copyFromBgr24 (checked by --self-test), ten times faster.
-	cv::Mat yuy2(frameHeight_, frameWidth_, CV_8UC2, yuy2_.data());
-	cv::cvtColor(picture, yuy2, cv::COLOR_BGR2YUV_YUY2);
 	const bool shoot = shootNextFrame_;
-	const bool iconVisible = cameraButton_->visible();
-	if (shoot)
-		cameraButton_->hide(); // pictures from the button leave the icon out
-	effects_.process(yuy2Frame);
-	if (shoot && iconVisible)
-		cameraButton_->show();
-	cv::Mat shown = toBgr(yuy2Frame);
+	cv::Mat shown;
+	if (movie)
+	{
+		const FaceFrame clip = staged_ ? FaceFrame{ 0, stagedMovie_, stagedMovieFaces_ } : movie_.latest();
+		movieFrame_ = !clip.bgr.empty();
+		if (prankOn_ && prankMode_ == PrankMode::TheirFaceOnVideo)
+		{
+			// Their face on the actors; until it is found, the video as it is
+			// (never the face in front of the camera, which would give it away).
+			const FaceFrame theirs = theirFrame();
+			const int face = biggestFace(theirs.faces);
+			theirFace_ = face >= 0;
+			if (theirFace_)
+				shown = composeOnto(clip, prankStyle(), &theirs.bgr, &theirs.faces[face]);
+			else if (movieFrame_)
+				shown = clip.bgr.clone();
+		}
+		else
+			shown = composeOnto(clip, prankOn_ ? prankStyle() : PasteStyle());
+	}
+	else if (prankOn_ && prankMode_ == PrankMode::MyFaceOnThem)
+	{
+		const FaceFrame theirs = theirFrame();
+		theirFace_ = !theirs.faces.empty();
+		shown = composeOnto(theirs, prankStyle());
+	}
+	if (shown.empty()) // the camera picture, or the video or window has not sent a picture yet
+	{
+		// 2. A new or blurred background.
+		if (haveMask && aiCutOut)
+		{
+			if (backgroundMode_ == BackgroundMode::Blur)
+				styler_.blurBackground(picture, personAlpha_);
+			else
+				styler_.replaceBackground(picture, personAlpha_,
+					backgrounds_[std::min<std::size_t>(backgroundIndex_, backgrounds_.size() - 1)].bgr);
+		}
 
-	// 4. Looks, then stickers on top, then the frame.
-	styler_.applyLook(shown, look_);
-	if (adjust_.any())
-		styler_.applyAdjustments(shown, adjust_);
-	if (faceSticker_ >= 0)
-		faceArt_.draw(shown, faces_, static_cast<FaceStickers::Kind>(faceSticker_));
-	for (const Placed& sticker : placed_)
-		if (sticker.on)
-			overlayBgra(shown, sticker.bgra, cv::Point2f(sticker.center.x * frameWidth_, sticker.center.y * frameHeight_),
-				sticker.width * frameWidth_);
+		// 3. The core: per-pixel filters, the game, the camera icon.
+		syncEffects();
+		yuy2_.resize(webcam::Yuy2Frame::bytesFor(frameWidth_, frameHeight_));
+		webcam::Yuy2Frame yuy2Frame;
+		yuy2Frame.wrap(yuy2_.data(), yuy2_.size(), frameWidth_, frameHeight_);
+		// Same result as Yuy2Frame::copyFromBgr24 (checked by --self-test), ten times faster.
+		cv::Mat yuy2(frameHeight_, frameWidth_, CV_8UC2, yuy2_.data());
+		cv::cvtColor(picture, yuy2, cv::COLOR_BGR2YUV_YUY2);
+		const bool iconVisible = cameraButton_->visible();
+		if (shoot)
+			cameraButton_->hide(); // pictures from the button leave the icon out
+		effects_.process(yuy2Frame);
+		if (shoot && iconVisible)
+			cameraButton_->show();
+		shown = toBgr(yuy2Frame);
+
+		// 4. Looks, then stickers on top.
+		styler_.applyLook(shown, look_);
+		if (adjust_.any())
+			styler_.applyAdjustments(shown, adjust_);
+		if (prankOn_ && prankMode_ != PrankMode::TheirFaceOnVideo)
+			prankFaces(shown);
+		if (faceSticker_ >= 0)
+			faceArt_.draw(shown, faces_, static_cast<FaceStickers::Kind>(faceSticker_));
+		for (const Placed& sticker : placed_)
+			if (sticker.on)
+				overlayBgra(shown, sticker.bgra, cv::Point2f(sticker.center.x * frameWidth_, sticker.center.y * frameHeight_),
+					sticker.width * frameWidth_);
+	}
+	// Then the frame, on either.
 	if (frameStyle_ != FrameStyle::None || dateStamp_)
 		styler_.applyFrame(shown, frameStyle_, dateStamp_);
 	shown_ = shown;
@@ -769,6 +1019,8 @@ void App::processFrame(const cv::Mat& frame)
 		waveShot_ = false;
 		takePicture(shown_);
 	}
+	if (recording_ && shown_.size() != recordSize_)
+		toggleRecording(); // a video and the camera differ in size; one file holds one size
 	if (recording_)
 	{
 		writer_.write(shown_);
@@ -805,6 +1057,229 @@ void App::processFrame(const cv::Mat& frame)
 		uploadThumbnail(backgroundPreview_, learned, 480);
 		toast("背景記住了，可以開始玩了！");
 	}
+}
+
+cv::Mat App::composeOnto(const FaceFrame& frame, const PasteStyle& style, const cv::Mat* from, const Face* fromFace)
+{
+	movieFaces_ = static_cast<int>(frame.faces.size());
+	pastedFaces_ = 0;
+	if (frame.bgr.empty())
+		return cv::Mat();
+
+	cv::Mat shown = frame.bgr.clone();
+	std::vector<Face> covered;
+	if (from != nullptr && fromFace != nullptr)
+	{
+		// One face on everybody: a whole cast of the same person.
+		for (const Face& face : frame.faces)
+		{
+			pasteFace(*from, *fromFace, shown, face, style);
+			covered.push_back(face);
+		}
+	}
+	else
+		// Biggest face in front of the camera onto the biggest in the picture, and so on.
+		for (const std::pair<int, int>& pair : pairFaces(faces_, frame.faces))
+		{
+			pasteFace(facePicture_, faces_[pair.first], shown, frame.faces[pair.second], style);
+			covered.push_back(frame.faces[pair.second]);
+		}
+	pastedFaces_ = static_cast<int>(covered.size());
+	if (faceSticker_ >= 0)
+		faceArt_.draw(shown, covered, static_cast<FaceStickers::Kind>(faceSticker_));
+	return shown;
+}
+
+void App::prankFaces(cv::Mat& picture)
+{
+	const PasteStyle style = prankStyle();
+	if (prankMode_ == PrankMode::TheirFaceOnMe)
+	{
+		const FaceFrame theirs = theirFrame();
+		const int face = biggestFace(theirs.faces);
+		theirFace_ = face >= 0;
+		if (theirFace_)
+		{
+			for (const Face& mine : faces_)
+				pasteFace(theirs.bgr, theirs.faces[face], picture, mine, style);
+			return;
+		}
+	}
+	// Just me, or no face to borrow yet: pull faces at my own.
+	if (style.jaw <= 0.0f && style.warp == Warp::None)
+		return;
+	PasteStyle own = style;
+	own.recolor = false;
+	const cv::Mat copy = picture.clone();
+	for (const Face& mine : faces_)
+		pasteFace(copy, mine, picture, mine, own);
+}
+
+PasteStyle App::prankStyle() const
+{
+	PasteStyle style;
+	// Quiet passages keep the mouth shut; the loud ones throw it open.
+	style.jaw = singAlong_ ? std::clamp((jaw_ - 0.3f) / 0.7f, 0.0f, 1.0f) : 0.0f;
+	style.warp = warp_;
+	return style;
+}
+
+void App::togglePrank()
+{
+	prankOn_ = !prankOn_;
+	jaw_ = 0.0f;
+	if (prankMode_ == PrankMode::TheirFaceOnVideo)
+	{
+		// The video and its soundtrack start from the top, and end with the prank.
+		if (!prankOn_)
+			stopMovie();
+		else if (movieOn())
+			restartMovie();
+		else if (!clips_.empty())
+			startMovie(std::clamp(lastClip_, 0, static_cast<int>(clips_.size()) - 1));
+		else
+			toast("先把影片拖進視窗");
+	}
+	if (!clipAudio_ && singAlong_ && music_.loaded())
+	{
+		music_.stop();
+		if (prankOn_)
+			music_.play();
+	}
+	if (!prankOn_ || !clips_.empty() || prankMode_ != PrankMode::TheirFaceOnVideo)
+		toast(prankOn_ ? "惡搞開始！按 F9 結束" : "惡搞結束");
+}
+
+FaceFrame App::theirFrame() const
+{
+	return staged_ ? stagedTheirs_ : grabber_.latest();
+}
+
+void App::refreshWindows()
+{
+	const std::uintptr_t watched = windowIndex_ >= 0 ? windows_[windowIndex_].handle : ~std::uintptr_t(0);
+	windows_.clear();
+	ScreenWindow screen;
+	screen.title = "整個主螢幕";
+	windows_.push_back(screen);
+	for (const ScreenWindow& window : listScreenWindows())
+		windows_.push_back(window);
+	windowIndex_ = -1;
+	for (std::size_t i = 0; i < windows_.size(); ++i)
+		if (windows_[i].handle == watched)
+			windowIndex_ = static_cast<int>(i);
+}
+
+void App::watchWindow(int index, const cv::Rect2f& part)
+{
+	windowIndex_ = index;
+	grabPart_ = part;
+	if (!staged_)
+		grabber_.watch(windows_[index].handle, part);
+}
+
+void App::startRegionPick()
+{
+	if (windows_.empty())
+		refreshWindows();
+	const int index = windowIndex_ >= 0 ? windowIndex_ : 0; // nothing picked yet: the whole main screen
+	cv::Mat shot;
+	if (!staged_ && !grabScreenWindow(windows_[index].handle, shot))
+	{
+		toast("抓不到這個視窗：它被縮小或關掉了嗎？");
+		return;
+	}
+	if (!staged_)
+		regionShot_.upload(shot);
+	regionWindow_ = index;
+	// Start from the box in use, if this is the window it belongs to.
+	const bool same = index == windowIndex_;
+	regionFrom_ = same ? cv::Point2f(grabPart_.x, grabPart_.y) : cv::Point2f(0.0f, 0.0f);
+	regionTo_ = same ? cv::Point2f(grabPart_.x + grabPart_.width, grabPart_.y + grabPart_.height) : cv::Point2f(1.0f, 1.0f);
+	openRegion_ = true;
+}
+
+void App::toggleOutputWindow()
+{
+	outputOpen_ = !outputOpen_;
+	if (setOutput_)
+		setOutput_(outputOpen_);
+	if (outputOpen_)
+		toast("輸出視窗開好了：在 OBS 用「視窗擷取」選它");
+}
+
+void App::startMovie(int index)
+{
+	if (index < 0 || index >= static_cast<int>(clips_.size()))
+		return;
+	if (game_ == GameState::Playing)
+		game_ = GameState::Idle; // the geckos live in the camera picture
+	if (clipAudio_)
+		stopMovie(); // gives the music player back its own track first
+	clipIndex_ = index;
+	lastClip_ = index;
+	movieFrame_ = false;
+	clipSeconds_ = 0.0;
+	if (staged_)
+		return;
+	movie_.open(clips_[index].file);
+	std::string error;
+	if (!clips_[index].audio.empty() && music_.load(clips_[index].audio, error))
+	{
+		// Started over with the video, not on its own.
+		clipAudio_ = true;
+		music_.setVolume(volume_);
+		music_.setLooping(false);
+		music_.play();
+	}
+}
+
+void App::stopMovie()
+{
+	movie_.close();
+	clipIndex_ = -1;
+	movieFrame_ = false;
+	if (clipAudio_)
+	{
+		clipAudio_ = false;
+		music_.stop();
+		std::string error;
+		std::error_code ec;
+		if (std::filesystem::exists(pathFromUtf8(musicPath_), ec) && music_.load(pathFromUtf8(musicPath_), error))
+			music_.setLooping(loop_);
+	}
+}
+
+void App::pauseMovie(bool paused)
+{
+	movie_.setPaused(paused);
+	if (clipAudio_)
+		paused ? music_.pause() : music_.play();
+}
+
+void App::restartMovie()
+{
+	movie_.restart();
+	clipSeconds_ = 0.0;
+	if (clipAudio_)
+	{
+		music_.stop();
+		music_.play();
+	}
+}
+
+void App::followMovieAudio()
+{
+	if (!clipAudio_ || !movieOn())
+		return;
+	// The video went round again: so does its sound.
+	const double seconds = movie_.seconds();
+	if (seconds + 0.5 < clipSeconds_)
+	{
+		music_.stop();
+		music_.play();
+	}
+	clipSeconds_ = seconds;
 }
 
 void App::moveGeckos(double seconds)
@@ -900,6 +1375,7 @@ void App::startFourShot()
 
 void App::startGame()
 {
+	stopMovie();
 	score_ = 0;
 	newBest_ = false;
 	game_ = GameState::Playing;
@@ -998,6 +1474,7 @@ void App::toggleRecording()
 		return;
 	}
 	recording_ = true;
+	recordSize_ = shown_.size();
 	recordedFrames_ = 0;
 	recordingStart_ = Clock::now();
 	recordingFile_ = pathToUtf8(file);
@@ -1027,6 +1504,10 @@ void App::resetEffects()
 	dateStamp_ = false;
 	gray_ = tint_ = skinMark_ = colorMark_ = false;
 	game_ = GameState::Idle;
+	stopMovie();
+	if (prankOn_)
+		togglePrank();
+	warp_ = Warp::None;
 	showBlocks_ = false;
 	debugView_ = 0;
 	frozen_ = false;
@@ -1055,6 +1536,9 @@ void App::loadSettings()
 	backendIndex_ = std::max(0, s.getInt("camera.backend", backendIndex_));
 	request_.preferMjpg = s.getBool("camera.mjpg", request_.preferMjpg);
 	fpsIndex_ = std::clamp(s.getInt("camera.fps", fpsIndex_), 0, 3);
+	prankMode_ = static_cast<PrankMode>(std::clamp(s.getInt("prank.mode", 0), 0, 3));
+	singAlong_ = s.getBool("prank.sing", singAlong_);
+	warp_ = static_cast<Warp>(std::clamp(s.getInt("prank.warp", 0), 0, static_cast<int>(Warp::Count) - 1));
 	styler_.setUseGpu(s.getBool("gpu", styler_.useGpu()));
 	previewInterval_ = s.getFloat("camera.interval", static_cast<float>(previewInterval_));
 	mirror_ = s.getBool("mirror", mirror_);
@@ -1124,6 +1608,9 @@ void App::saveSettings()
 	s.set("camera.backend", backendIndex_);
 	s.set("camera.mjpg", request_.preferMjpg);
 	s.set("camera.fps", fpsIndex_);
+	s.set("prank.mode", static_cast<int>(prankMode_));
+	s.set("prank.sing", singAlong_);
+	s.set("prank.warp", static_cast<int>(warp_));
 	s.set("gpu", styler_.useGpu());
 	s.set("camera.interval", static_cast<float>(previewInterval_));
 	s.set("mirror", mirror_);
@@ -1185,6 +1672,12 @@ void App::update()
 {
 	scale_ = ImGui::GetStyle().FontScaleDpi;
 	runTimers();
+	if (movieOn() && movie_.failed())
+	{
+		toast("打不開這部影片：" + clips_[clipIndex_].name);
+		stopMovie();
+	}
+	followMovieAudio();
 
 	if (!staged_ && !cameraStarted_)
 	{
@@ -1228,6 +1721,10 @@ void App::update()
 		}
 		if (ImGui::IsKeyPressed(ImGuiKey_F11, false))
 			toggleFullscreen();
+		if (ImGui::IsKeyPressed(ImGuiKey_F9, false))
+			togglePrank();
+		if (ImGui::IsKeyPressed(ImGuiKey_F10, false))
+			warp_ = static_cast<Warp>((static_cast<int>(warp_) + 1) % static_cast<int>(Warp::Count));
 		if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && fullscreen_)
 			toggleFullscreen();
 	}
@@ -1257,6 +1754,7 @@ void App::update()
 		drawPhotoStrip();
 	bottomHeight_ = ImGui::GetCursorPosY() - barStart;
 	(void)bottomStart;
+	drawRegionPicker();
 
 	ImGui::PopFont();
 	ImGui::End();
@@ -1399,7 +1897,7 @@ void App::handleVideoMouse(ImVec2 corner, ImVec2 fitted)
 	// Drag placed stickers to move them; the wheel resizes the one under the mouse.
 	ImGui::SetCursorScreenPos(corner);
 	ImGui::InvisibleButton("picture", fitted);
-	if (frameWidth_ == 0 || fitted.x <= 0)
+	if (frameWidth_ == 0 || fitted.x <= 0 || movieOn()) // placed stickers are not on a video
 		return;
 	const ImVec2 mouse = ImGui::GetIO().MousePos;
 	const cv::Point2f at((mouse.x - corner.x) / fitted.x, (mouse.y - corner.y) / fitted.y);
@@ -1478,6 +1976,44 @@ void App::drawOverlay(ImVec2 min, ImVec2 max)
 		banner(center.y, "記住背景中...", white, bannerSize);
 	else if (needsLearnedBackground() && !backgroundReady())
 		banner(min.y + pad, "這個玩法要先「記住背景」：按上方按鈕後離開畫面", IM_COL32(255, 210, 120, 255), bannerSize);
+
+	// Pranks: a reminder that it is on, and what it still needs. Only here,
+	// never in the output window the other person sees.
+	if (prankOn_)
+	{
+		const char* text = "惡搞中（F9 結束）";
+		const float size = kTextSize * scale_;
+		const ImVec2 extent = fonts_.bold->CalcTextSizeA(size, FLT_MAX, 0.0f, text);
+		const ImVec2 a(min.x + pad, max.y - extent.y - pad * 3);
+		draw->AddRectFilled(a, ImVec2(a.x + extent.x + pad * 2, max.y - pad), IM_COL32(200, 40, 120, 220), 8.0f * scale_);
+		draw->AddText(fonts_.bold, size, ImVec2(a.x + pad, a.y + pad * 0.5f), white, text);
+		const bool video = prankMode_ == PrankMode::TheirFaceOnVideo;
+		if (video && !movieOn())
+			banner(min.y + pad, "先在「惡搞」選一部影片（把影片拖進視窗）", IM_COL32(255, 210, 120, 255), bannerSize);
+		else if (!video && faces_.empty())
+			banner(min.y + pad, "看著鏡頭，讓程式找到你的臉", IM_COL32(255, 210, 120, 255), bannerSize);
+		else if (prankMode_ != PrankMode::JustMe && !theirFace_)
+			banner(min.y + pad,
+				grabber_.lost() ? "對方的視窗被縮小或關掉了" : "還沒找到對方的臉：選對方的視窗，或把截圖拖進來",
+				IM_COL32(255, 210, 120, 255), bannerSize);
+		else if (singAlong_ && !music_.loaded())
+			banner(min.y + pad, "把 mp3 拖進視窗，下巴就會跟著音樂動", IM_COL32(200, 200, 200, 255), bannerSize);
+	}
+
+	// Starring in a video: what is missing for the paste.
+	if (movieOn())
+	{
+		if (!movieFrame_)
+			banner(center.y, "影片載入中...", white, bannerSize);
+		else if (prankOn_)
+		{
+			// The prank's own hints, above, take this place.
+		}
+		else if (faces_.empty())
+			banner(min.y + pad, "看著鏡頭，讓程式找到你的臉", IM_COL32(255, 210, 120, 255), bannerSize);
+		else if (movieFaces_ == 0)
+			banner(min.y + pad, "這一段影片裡沒有看得到的臉", IM_COL32(200, 200, 200, 255), bannerSize);
+	}
 
 	// Countdown, with the four-shot progress.
 	if (countdown_)
@@ -1567,6 +2103,122 @@ bool App::thumbnailButton(const char* id, const Texture& texture, float height, 
 		ImGui::PopStyleColor();
 	ImGui::PopStyleVar();
 	return clicked;
+}
+
+// A snapshot of the other person's window, to drag a box round them on.
+void App::drawRegionPicker()
+{
+	const char* title = "框選對方";
+	if (openRegion_)
+	{
+		ImGui::OpenPopup(title);
+		openRegion_ = false;
+	}
+	const ImGuiViewport* viewport = ImGui::GetMainViewport();
+	ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+	if (!ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+		return;
+	ImGui::TextUnformatted("在畫面上拖出一個框，框住對方的臉（例如視訊裡對方那一格）。框越小越快，也越不會抓到你自己。");
+
+	const ImVec2 size = regionShot_.fit(ImVec2(viewport->WorkSize.x * 0.7f, viewport->WorkSize.y * 0.6f));
+	const ImVec2 corner = ImGui::GetCursorScreenPos();
+	ImGui::Image(regionShot_.id(), size);
+	ImGui::SetCursorScreenPos(corner);
+	ImGui::InvisibleButton("##region", size);
+	const ImVec2 mouse = ImGui::GetIO().MousePos;
+	const cv::Point2f at(std::clamp((mouse.x - corner.x) / std::max(1.0f, size.x), 0.0f, 1.0f),
+		std::clamp((mouse.y - corner.y) / std::max(1.0f, size.y), 0.0f, 1.0f));
+	if (ImGui::IsItemActivated())
+	{
+		regionFrom_ = regionTo_ = at;
+		regionDragging_ = true;
+	}
+	if (regionDragging_ && ImGui::IsItemActive())
+		regionTo_ = at;
+	if (ImGui::IsItemDeactivated())
+		regionDragging_ = false;
+
+	// Everything outside the box dimmed, the box outlined.
+	const cv::Rect2f box(std::min(regionFrom_.x, regionTo_.x), std::min(regionFrom_.y, regionTo_.y),
+		std::fabs(regionTo_.x - regionFrom_.x), std::fabs(regionTo_.y - regionFrom_.y));
+	ImDrawList* draw = ImGui::GetWindowDrawList();
+	const ImVec2 end(corner.x + size.x, corner.y + size.y);
+	const ImVec2 a(corner.x + box.x * size.x, corner.y + box.y * size.y);
+	const ImVec2 b(corner.x + (box.x + box.width) * size.x, corner.y + (box.y + box.height) * size.y);
+	const ImU32 dim = IM_COL32(0, 0, 0, 140);
+	draw->AddRectFilled(corner, ImVec2(end.x, a.y), dim);
+	draw->AddRectFilled(ImVec2(corner.x, b.y), end, dim);
+	draw->AddRectFilled(ImVec2(corner.x, a.y), ImVec2(a.x, b.y), dim);
+	draw->AddRectFilled(ImVec2(b.x, a.y), ImVec2(end.x, b.y), dim);
+	draw->AddRect(a, b, ImGui::GetColorU32(kAccent), 0.0f, 0, 2.0f * scale_);
+
+	// Too small a box cannot hold a face the detector would find.
+	const bool usable = box.width * size.x >= 24.0f * scale_ && box.height * size.y >= 24.0f * scale_;
+	ImGui::BeginDisabled(!usable);
+	pushPrimary();
+	if (ImGui::Button("用這個範圍"))
+	{
+		watchWindow(regionWindow_, box);
+		ImGui::CloseCurrentPopup();
+	}
+	popPrimary();
+	ImGui::EndDisabled();
+	ImGui::SameLine();
+	if (ImGui::Button("整個視窗"))
+	{
+		watchWindow(regionWindow_, cv::Rect2f(0.0f, 0.0f, 1.0f, 1.0f));
+		ImGui::CloseCurrentPopup();
+	}
+	ImGui::SameLine();
+	if (ImGui::Button("取消"))
+		ImGui::CloseCurrentPopup();
+	ImGui::SameLine();
+	ImGui::AlignTextToFramePadding();
+	ImGui::TextDisabled("（%s）", windows_[regionWindow_].title.c_str());
+	ImGui::EndPopup();
+}
+
+// The videos to pick from, and the controls of the one playing.
+void App::drawClips(float thumb)
+{
+	for (std::size_t i = 0; i < clips_.size(); ++i)
+	{
+		if (i > 0)
+			ImGui::SameLine();
+		const std::string id = "clip" + std::to_string(i);
+		if (thumbnailButton(id.c_str(), clips_[i].thumbnail, thumb, clipIndex_ == static_cast<int>(i)))
+		{
+			if (clipIndex_ == static_cast<int>(i))
+				stopMovie();
+			else
+				startMovie(static_cast<int>(i));
+		}
+		ImGui::SetItemTooltip("%s%s", clips_[i].name.c_str(), clips_[i].audio.empty() ? "（沒有配樂）" : "（有配樂）");
+	}
+	if (clips_.empty())
+	{
+		ImGui::AlignTextToFramePadding();
+		ImGui::TextDisabled("還沒有影片");
+	}
+	if (!movieOn())
+		return;
+	ImGui::SameLine(0, 24.0f * scale_);
+	if (ImGui::Button(movie_.paused() ? "繼續播放" : "暫停影片"))
+		pauseMovie(!movie_.paused());
+	ImGui::SameLine();
+	if (ImGui::Button("從頭開始"))
+		restartMovie();
+	ImGui::SameLine();
+	if (ImGui::Button("停止"))
+		stopMovie();
+	ImGui::SameLine();
+	ImGui::AlignTextToFramePadding();
+	const int at = static_cast<int>(movie_.seconds());
+	const int length = static_cast<int>(movie_.duration());
+	if (length > 0)
+		ImGui::Text("%d:%02d / %d:%02d", at / 60, at % 60, length / 60, length % 60);
+	ImGui::SameLine(0, 16.0f * scale_);
+	ImGui::Text("貼上 %d 張臉%s", pastedFaces_, clipAudio_ ? "，播放配樂中" : "");
 }
 
 void App::drawDrawer()
@@ -1794,6 +2446,134 @@ void App::drawDrawer()
 		break;
 	}
 
+	case Drawer::Movie:
+	{
+		label("影片");
+		if (!ai_.faceTrackerReady() || !movie_.faceTrackerReady())
+		{
+			ImGui::TextColored(kWarn, "找不到人臉偵測模型，這個玩法不能用");
+			break;
+		}
+		drawClips(thumb);
+		ImGui::TextDisabled("把影片檔（mp4、mov、avi…）拖進視窗就能加入，同名的 mp3 一起拖進來就是配樂。"
+			"你的臉會貼到影片裡最大的那張臉上，兩個人一起就貼兩張。");
+		hint("點縮圖開始播放，再點一次停止。\n影片裡的人轉成側臉、被擋住或太小時，那幾格會露出原本的臉。\n"
+			"拍照、四格拍貼、錄影都照常可以用；貼圖區的「跟著臉」也會戴在你貼上去的臉上。");
+		break;
+	}
+
+	case Drawer::Prank:
+	{
+		if (!ai_.faceTrackerReady() || !grabber_.faceTrackerReady())
+		{
+			ImGui::TextColored(kWarn, "找不到人臉偵測模型，這個玩法不能用");
+			break;
+		}
+		label("玩法");
+		const char* modes[] = { "對方的臉貼到影片上", "對方的臉貼到我臉上", "我的臉貼到對方臉上", "只惡搞我自己的臉" };
+		for (int i = 0; i < 4; ++i)
+		{
+			if (i > 0)
+				ImGui::SameLine();
+			if (ImGui::RadioButton(modes[i], static_cast<int>(prankMode_) == i) && static_cast<int>(prankMode_) != i)
+			{
+				if (prankOn_)
+					togglePrank(); // switching while on: stop cleanly first
+				prankMode_ = static_cast<PrankMode>(i);
+			}
+		}
+		hint("對方的臉貼到影片上：送出去的畫面換成你選的影片，影片裡每個人都長著對方的臉，跟著配樂對嘴。\n"
+			"對方的臉貼到我臉上：對方會在視訊裡看到自己的臉長在你頭上，跟著你動。\n"
+			"我的臉貼到對方臉上：送出去的畫面換成對方的視窗，對方臉上是你的臉。\n"
+			"只惡搞我自己的臉：不換臉，只有下巴和哈哈鏡。");
+		ImGui::SameLine(0, 24.0f * scale_);
+		pushPrimary();
+		if (ImGui::Button(prankOn_ ? "結束惡搞 (F9)" : "開始惡搞 (F9)"))
+			togglePrank();
+		popPrimary();
+
+		if (prankMode_ != PrankMode::JustMe)
+		{
+			label("對方");
+			if (screenGrabSupported())
+			{
+				const char* preview = windowIndex_ >= 0 ? windows_[windowIndex_].title.c_str()
+					: (grabber_.showing() ? "（用拖進來的截圖）" : "選對方的視訊視窗...");
+				ImGui::SetNextItemWidth(320.0f * scale_);
+				if (ImGui::BeginCombo("##window", preview))
+				{
+					if (ImGui::IsWindowAppearing())
+						refreshWindows();
+					for (std::size_t i = 0; i < windows_.size(); ++i)
+					{
+						const std::string id = windows_[i].title + "##w" + std::to_string(i);
+						if (ImGui::Selectable(id.c_str(), windowIndex_ == static_cast<int>(i)))
+							watchWindow(static_cast<int>(i), cv::Rect2f(0.0f, 0.0f, 1.0f, 1.0f));
+					}
+					ImGui::EndCombo();
+				}
+				hint("選 LINE、Meet、Zoom 這類視訊的視窗。程式抓的是螢幕上看得到的樣子，"
+					"所以那個視窗要露出來，不能縮小或被擋住；裡面最大的那張臉就是對方。\n也可以把對方的截圖拖進視窗。");
+				ImGui::SameLine();
+				if (ImGui::Button("框選"))
+					startRegionPick();
+				hint("在視窗的畫面上框出對方那一格：只抓框起來的地方，比較快，也不會抓到你自己的小視窗。"
+					"視窗移動或縮放時，框會跟著。");
+				ImGui::SameLine();
+			}
+			ImGui::AlignTextToFramePadding();
+			const bool watching = staged_ || grabber_.watching() || grabber_.showing();
+			if (!watching)
+				ImGui::TextDisabled(screenGrabSupported() ? "或把截圖拖進視窗" : "把對方的截圖拖進視窗（這個系統還不能直接抓視窗）");
+			else if (grabber_.lost())
+				ImGui::TextColored(kWarn, "視窗被縮小或關掉了");
+			else if ((staged_ ? stagedTheirs_ : grabber_.latest()).faces.empty())
+				ImGui::TextColored(kWarn, "還沒找到臉");
+			else
+				ImGui::TextColored(kDone, "%s", grabber_.showing() ? "找到截圖裡的臉了"
+					: grabPart_.area() < 0.999f ? "找到對方的臉了（即時，框選範圍）" : "找到對方的臉了（即時）");
+		}
+
+		if (prankMode_ == PrankMode::TheirFaceOnVideo)
+		{
+			label("影片");
+			drawClips(thumb * 0.8f);
+			hint("點一部影片，F9 開始時就播它。影片和同名的 mp3 一起拖進視窗，mp3 就是它的配樂，"
+				"下巴會跟著配樂開合。");
+		}
+
+		label("效果");
+		ImGui::Checkbox("下巴跟著音樂開合", &singAlong_);
+		ImGui::SameLine();
+		ImGui::AlignTextToFramePadding();
+		if (clipAudio_)
+			ImGui::TextDisabled("（影片的配樂）");
+		else if (music_.loaded())
+			ImGui::TextDisabled("（%s）", pathToUtf8(pathFromUtf8(musicPath_).filename()).c_str());
+		else
+			ImGui::TextColored(kWarn, "（把 mp3 拖進視窗）");
+		ImGui::SameLine(0, 24.0f * scale_);
+		label("哈哈鏡");
+		const char* warps[] = { "無", "大眼", "大嘴", "扁臉", "長臉" };
+		for (int i = 0; i < static_cast<int>(Warp::Count); ++i)
+		{
+			if (i > 0)
+				ImGui::SameLine();
+			if (ImGui::RadioButton(warps[i], static_cast<int>(warp_) == i))
+				warp_ = static_cast<Warp>(i);
+		}
+		hint("F10 輪流切換。");
+		ImGui::SameLine(0, 24.0f * scale_);
+		if (ImGui::Button(outputOpen_ ? "關閉輸出視窗" : "開啟輸出視窗（給 OBS）"))
+			toggleOutputWindow();
+		hint("讓視訊軟體看到惡搞畫面：\n"
+			"1. 按這個按鈕，開出只有畫面的「輸出視窗」。\n"
+			"2. 在 OBS 新增「視窗擷取」，選這個輸出視窗，再按「啟動虛擬攝影機」。\n"
+			"3. 在 LINE / Meet / Zoom 的攝影機選「OBS Virtual Camera」。\n"
+			"輸出視窗不會出現按鈕和提示，對方只看得到畫面。");
+		break;
+	}
+
 	case Drawer::None:
 		break;
 	}
@@ -1806,7 +2586,7 @@ void App::drawDrawer()
 void App::drawBottomBar()
 {
 	const float height = ImGui::GetFrameHeight() * 1.6f;
-	const ImVec2 size(100.0f * scale_, height);
+	const ImVec2 size(86.0f * scale_, height); // six of them, and the picture-taking buttons, in 1280 pixels
 	const bool stickersOn = faceSticker_ >= 0 ||
 		std::any_of(placed_.begin(), placed_.end(), [](const Placed& s) { return s.on; });
 	const bool filtersOn = look_ != Look::None || adjust_.any() || frameStyle_ != FrameStyle::None || dateStamp_ ||
@@ -1821,6 +2601,8 @@ void App::drawBottomBar()
 		{ "貼圖", Drawer::Stickers, stickersOn },
 		{ "濾鏡", Drawer::Filters, filtersOn },
 		{ "抓壁虎", Drawer::Game, game_ != GameState::Idle },
+		{ "當主角", Drawer::Movie, movieOn() },
+		{ "惡搞", Drawer::Prank, prankOn_ },
 	};
 	for (const auto& category : categories)
 	{

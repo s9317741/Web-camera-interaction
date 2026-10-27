@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace app {
 
@@ -31,6 +32,15 @@ public:
 	// Position and length in seconds; 0 when unknown.
 	float position() const;
 	float length() const;
+
+	// How loud the music is at this moment, 0..1; 0 while stopped, or while
+	// a newly loaded track is still being measured (on a thread of its own).
+	float level() const;
+
+	// The loudness of a whole file, kLevelRate values a second, scaled so
+	// the loud passages are near 1. Empty when the file cannot be read.
+	static const int kLevelRate = 50;
+	static std::vector<float> loudness(const std::filesystem::path& file);
 
 private:
 	struct Impl;

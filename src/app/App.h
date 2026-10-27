@@ -3,7 +3,9 @@
 
 #include "Assets.h"
 #include "Camera.h"
+#include "Movie.h"
 #include "Music.h"
+#include "ScreenGrab.h"
 #include "Settings.h"
 #include "Sound.h"
 #include "Stickers.h"
@@ -37,6 +39,11 @@ struct UiFonts
 // An interactive photo booth. Every camera frame goes through:
 //   mirror -> AI person mask -> new or blurred background -> core effects
 //   (filters, game, wave-to-shoot) -> looks -> face and placed stickers -> frame
+// or, while a video plays in "當主角", the video frame with the faces in it
+// covered by the faces in front of the camera -> face stickers -> frame.
+// "惡搞" takes the face from another window (a video call) and puts it on
+// the actors of a video, on the faces in front of the camera, or the other
+// way round, singing along to the music.
 // and the UI around it: a short guide, the big picture, the ways to play
 // along the bottom, recent photos, and everything technical in "Advanced".
 class App
@@ -50,22 +57,30 @@ public:
 
 	void update();
 
-	// Image files dropped on the window: transparent PNGs become stickers,
-	// other pictures become backgrounds. Copies are kept for next time.
+	// Files dropped on the window: transparent PNGs become stickers, other
+	// pictures become backgrounds, videos go to "當主角". Copies are kept for next time.
 	void onDrop(const std::vector<std::filesystem::path>& files);
 
 	// How main switches the window to and from full screen.
 	void setFullscreenHandler(std::function<void(bool)> handler) { setFullscreen_ = std::move(handler); }
 
+	// The window with just the picture, for OBS: main opens and closes it,
+	// and tells the booth when the user closed it.
+	void setOutputWindowHandler(std::function<void(bool)> handler) { setOutput_ = std::move(handler); }
+	void outputWindowClosed() { outputOpen_ = false; }
+	const Texture& picture() const { return video_; }
+
 	// For --screenshot: a still picture and a known person shape instead of
 	// a camera and the AI. Scenes: 0 start, 1 playing, 2 Advanced, 3 stickers,
-	// 4 filters, 5 game, 6 game over, 7 four-shot countdown.
+	// 4 filters, 5 game, 6 game over, 7 four-shot countdown, 8 starring in a
+	// video, 9 prank, 10 boxing in the other person.
 	void stageScreenshot(int scene, const cv::Mat& room, const cv::Mat& person, const cv::Mat& personMask);
 
 private:
 	using Clock = std::chrono::steady_clock;
 
-	enum class Drawer { None, Background, Stickers, Filters, Game };
+	enum class Drawer { None, Background, Stickers, Filters, Game, Movie, Prank };
+	enum class PrankMode { TheirFaceOnVideo, TheirFaceOnMe, MyFaceOnThem, JustMe };
 	enum class BackgroundMode { Off, Replace, Blur };
 	enum class CutOut { Ai, Difference, GreenScreen };
 	enum class GameState { Idle, Playing, Over };
@@ -101,6 +116,14 @@ private:
 		Clock::time_point respawnAt;
 	};
 
+	struct Clip
+	{
+		std::string name;
+		std::filesystem::path file;
+		std::filesystem::path audio; // a sound file of the same name beside it, or empty
+		Texture thumbnail;
+	};
+
 	struct Photo
 	{
 		std::filesystem::path file;
@@ -109,6 +132,13 @@ private:
 
 	// Frames
 	void processFrame(const cv::Mat& frame);
+	// The faces in `frame` covered by the faces in front of the camera, or,
+	// with `from`, all of them by that one face.
+	cv::Mat composeOnto(const FaceFrame& frame, const PasteStyle& style, const cv::Mat* from = nullptr,
+		const Face* fromFace = nullptr);
+	FaceFrame theirFrame() const;
+	void prankFaces(cv::Mat& picture);
+	PasteStyle prankStyle() const;
 	void syncEffects();
 	void runTimers();
 	void moveGeckos(double seconds);
@@ -123,6 +153,17 @@ private:
 	void startCountdown(int seconds);
 	void startFourShot();
 	void startGame();
+	void startMovie(int index);
+	void stopMovie();
+	void pauseMovie(bool paused);
+	void restartMovie();
+	void followMovieAudio();
+	bool movieOn() const { return clipIndex_ >= 0; }
+	void togglePrank();
+	void refreshWindows();
+	void watchWindow(int index, const cv::Rect2f& part);
+	void startRegionPick();
+	void toggleOutputWindow();
 	void respawnGecko(Gecko& gecko);
 	bool onPerson(const cv::Rect& area) const;
 	void takePicture(const cv::Mat& bgr);
@@ -135,6 +176,7 @@ private:
 	void loadUserPictures();
 	bool addBackground(const std::string& name, const cv::Mat& bgr);
 	bool addSticker(const std::string& name, const cv::Mat& bgra);
+	bool addClip(const std::string& name, const std::filesystem::path& file);
 	void refreshBoxSticker();
 	void loadSettings();
 	void saveSettings();
@@ -150,6 +192,9 @@ private:
 	void drawAdvanced();
 	bool bigToggle(const char* label, bool active, bool marked, ImVec2 size);
 	bool thumbnailButton(const char* id, const Texture& texture, float height, bool selected);
+	void drawClips(float thumb);
+	void drawRegionPicker();
+	void stageClip(const cv::Mat& room, const cv::Mat& person, const cv::Mat& personMask);
 
 	UiFonts fonts_;
 	float scale_ = 1.0f;
@@ -191,6 +236,9 @@ private:
 	cv::Mat stagedFrame_;
 	cv::Mat stagedMask_;
 	std::vector<Face> stagedFaces_;
+	cv::Mat stagedMovie_;
+	std::vector<Face> stagedMovieFaces_;
+	FaceFrame stagedTheirs_;
 
 	// AI
 	AiWorker ai_;
@@ -198,6 +246,7 @@ private:
 	cv::Mat personAlpha_;
 	std::deque<cv::Mat> maskHistory_; // recent person masks, for "something moved here"
 	std::vector<Face> faces_;
+	cv::Mat facePicture_;  // the camera picture faces_ were found in
 
 	// Pipeline and what the user switched on
 	webcam::EffectChain effects_;
@@ -236,6 +285,37 @@ private:
 	std::shared_ptr<webcam::ColorHighlightEffect> skinEffect_;
 	bool colorMark_ = false;
 	std::shared_ptr<webcam::ColorHighlightEffect> colorMarkEffect_;
+
+	// Starring in a video
+	MoviePlayer movie_;
+	std::vector<Clip> clips_;
+	int clipIndex_ = -1;          // the video playing, or -1
+	int lastClip_ = 0;            // what F9 plays in "their face on a video"
+	bool clipAudio_ = false;      // the music player holds the video's own sound
+	double clipSeconds_ = 0.0;    // to notice the video starting over
+	bool movieFrame_ = false;     // a video frame has arrived
+	int movieFaces_ = 0;          // faces in the current video frame
+	int pastedFaces_ = 0;
+
+	// Pranks
+	ScreenGrabber grabber_;
+	std::vector<ScreenWindow> windows_; // the whole main screen first
+	int windowIndex_ = -1;              // the one watched, or -1
+	cv::Rect2f grabPart_{ 0.0f, 0.0f, 1.0f, 1.0f }; // the piece of it, as fractions of its size
+	// Boxing in the other person on a snapshot of their window.
+	Texture regionShot_;
+	int regionWindow_ = -1;
+	bool openRegion_ = false;
+	bool regionDragging_ = false;
+	cv::Point2f regionFrom_, regionTo_; // fractions of the snapshot
+	bool prankOn_ = false;
+	PrankMode prankMode_ = PrankMode::TheirFaceOnVideo;
+	bool singAlong_ = true;
+	Warp warp_ = Warp::None;
+	float jaw_ = 0.0f;                  // the music's loudness, smoothed
+	bool theirFace_ = false;            // a face was found in the other window
+	std::function<void(bool)> setOutput_;
+	bool outputOpen_ = false;
 
 	// Game
 	GameState game_ = GameState::Idle;
@@ -279,6 +359,7 @@ private:
 	bool recording_ = false;
 	std::string recordingFile_;
 	std::uint64_t recordedFrames_ = 0;
+	cv::Size recordSize_;
 	Clock::time_point recordingStart_;
 	int codecIndex_ = 0;
 
