@@ -232,6 +232,40 @@ TEST(touching_the_camera_button_takes_one_picture)
 	CHECK_EQ(1, booth.shots);
 }
 
+TEST(camera_button_returns_only_after_the_hand_leaves)
+{
+	PhotoBooth booth;
+	std::shared_ptr<TouchTriggerEffect> trigger = std::make_shared<TouchTriggerEffect>(booth.button,
+		[&booth](const Yuy2Frame&, const Yuy2Frame&) { ++booth.shots; });
+	booth.chain.clear();
+	booth.chain.add(trigger);
+	trigger->setRearmAfterQuietFrames(5);
+
+	for (int i = 0; i < 20; ++i) // hand stays on the button
+	{
+		FrameBuffer camera(PhotoBooth::kW, PhotoBooth::kH, yuv(150, 120, 135));
+		PhotoBooth::put(camera, 1800, 980, 60, 60, kSkin);
+		booth.chain.process(camera.frame);
+	}
+	CHECK_EQ(1, booth.shots);
+	CHECK(!booth.button->visible());
+
+	for (int i = 0; i < 4; ++i) // hand gone, not long enough yet
+	{
+		FrameBuffer camera(PhotoBooth::kW, PhotoBooth::kH, yuv(150, 120, 135));
+		booth.chain.process(camera.frame);
+	}
+	CHECK(!booth.button->visible());
+	FrameBuffer quiet(PhotoBooth::kW, PhotoBooth::kH, yuv(150, 120, 135));
+	booth.chain.process(quiet.frame);
+	CHECK(booth.button->visible());
+
+	FrameBuffer touch(PhotoBooth::kW, PhotoBooth::kH, yuv(150, 120, 135));
+	PhotoBooth::put(touch, 1800, 980, 60, 60, kSkin);
+	booth.chain.process(touch.frame);
+	CHECK_EQ(2, booth.shots);
+}
+
 TEST(standing_in_view_without_touching_takes_no_picture)
 {
 	PhotoBooth booth;
@@ -264,6 +298,58 @@ TEST(shadow_over_the_button_takes_no_picture)
 	PhotoBooth::put(camera, 1760, 940, 140, 130, yuv(16 + 134 * 6 / 10, 120, 135));
 	booth.chain.process(camera.frame);
 	CHECK_EQ(0, booth.shots);
+}
+
+TEST(mask_detection_marks_blocks_where_the_mask_is_set)
+{
+	std::vector<std::uint8_t> mask(32 * 16, 0);
+	for (int y = 0; y < 8; ++y)
+		for (int x = 8; x < 16; ++x)
+			mask[y * 32 + x] = 255; // block (1, 0)
+	mask[15 * 32 + 30] = 200;       // a lone pixel is not a block
+	const Detection d = Detection::fromMask(&mask[0], 32, 16, 32);
+	CHECK(d.valid());
+	CHECK(d.foreground(9, 3));
+	CHECK(d.foreground(30, 15));
+	CHECK(!d.foreground(0, 0));
+	CHECK(d.blocks().changed(1, 0));
+	CHECK(!d.blocks().changed(3, 1));
+}
+
+TEST(external_mask_replaces_the_background_comparison)
+{
+	// No background learned at all: a mask from elsewhere drives the trigger.
+	EffectChain chain;
+	int shots = 0;
+	std::shared_ptr<Sprite> button = whiteSquare(32, 8, 8);
+	chain.add(std::make_shared<TouchTriggerEffect>(button,
+		[&shots](const Yuy2Frame&, const Yuy2Frame&) { ++shots; }));
+
+	FrameBuffer fb(64, 64, yuv(100, 128, 128));
+	std::vector<std::uint8_t> mask(64 * 64, 0);
+	chain.setExternalDetection(Detection::fromMask(&mask[0], 64, 64, 64));
+	chain.process(fb.frame);
+	CHECK_EQ(0, shots);
+
+	for (int y = 16; y < 24; ++y)
+		for (int x = 16; x < 24; ++x)
+			mask[y * 64 + x] = 255; // a hand inside the button
+	chain.setExternalDetection(Detection::fromMask(&mask[0], 64, 64, 64));
+	chain.process(fb.frame);
+	CHECK_EQ(1, shots);
+}
+
+TEST(external_mask_of_another_size_is_ignored)
+{
+	EffectChain chain;
+	int shots = 0;
+	chain.add(std::make_shared<TouchTriggerEffect>(whiteSquare(32, 8, 8),
+		[&shots](const Yuy2Frame&, const Yuy2Frame&) { ++shots; }));
+	std::vector<std::uint8_t> mask(32 * 32, 255);
+	chain.setExternalDetection(Detection::fromMask(&mask[0], 32, 32, 32));
+	FrameBuffer fb(64, 64, yuv(100, 128, 128));
+	chain.process(fb.frame);
+	CHECK_EQ(0, shots);
 }
 
 TEST(difference_view_waits_for_a_background)

@@ -45,6 +45,45 @@ bool BlockMask::anyChanged() const
 	return std::find(bits_.begin(), bits_.end(), 1) != bits_.end();
 }
 
+Detection Detection::fromMask(const std::uint8_t* mask, int width, int height, std::size_t stride)
+{
+	Detection d;
+	if (mask == 0 || width <= 0 || height <= 0)
+		return d;
+	const int size = ChangeDetector::kBlockSize;
+	d.width_ = width;
+	d.height_ = height;
+	d.shift_ = 0;
+	d.gridWidth_ = width;
+	d.valid_ = true;
+	d.classes_.resize(static_cast<std::size_t>(width) * height);
+	const int cols = (width + size - 1) / size;
+	const int rows = (height + size - 1) / size;
+	d.blocks_ = BlockMask(cols, rows, size);
+	std::vector<int> counts(static_cast<std::size_t>(cols) * rows, 0);
+	for (int y = 0; y < height; ++y)
+	{
+		const std::uint8_t* in = mask + static_cast<std::size_t>(y) * stride;
+		std::uint8_t* out = &d.classes_[static_cast<std::size_t>(y) * width];
+		int* rowCounts = &counts[static_cast<std::size_t>(y / size) * cols];
+		for (int x = 0; x < width; ++x)
+		{
+			const bool foreground = in[x] >= 128;
+			out[x] = static_cast<std::uint8_t>(foreground ? kForeground : kBackground);
+			if (foreground)
+				++rowCounts[x / size];
+		}
+	}
+	for (int r = 0; r < rows; ++r)
+		for (int c = 0; c < cols; ++c)
+		{
+			const int bw = std::min(size, width - c * size);
+			const int bh = std::min(size, height - r * size);
+			d.blocks_.set(c, r, counts[static_cast<std::size_t>(r) * cols + c] * 2 > bw * bh);
+		}
+	return d;
+}
+
 ChangeDetector::ChangeDetector()
 	: width_(0), height_(0), shift_(0), frameWidth_(0), frameHeight_(0),
 	  sumFrameWidth_(0), sumFrameHeight_(0), sumShift_(0), framesWanted_(0), framesSeen_(0),

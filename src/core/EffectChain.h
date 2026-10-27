@@ -61,6 +61,11 @@ public:
 	// onReady runs on the frame that completes the background.
 	void startBackgroundLearning(int frameCount, std::function<void()> onReady);
 
+	// Uses this detection instead of comparing with the learned background,
+	// as long as it matches the frame's size (set it for every frame).
+	// An empty Detection switches back to the background comparison.
+	void setExternalDetection(const Detection& detection) { external_ = detection; }
+
 	void add(const std::shared_ptr<Effect>& effect);
 	void remove(const std::shared_ptr<Effect>& effect);
 	bool contains(const std::shared_ptr<Effect>& effect) const;
@@ -76,6 +81,7 @@ private:
 	std::vector<std::shared_ptr<Effect> > effects_;
 	Yuy2Image original_;
 	Detection noDetection_;
+	Detection external_;
 };
 
 } // namespace webcam

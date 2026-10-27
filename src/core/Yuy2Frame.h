@@ -68,6 +68,10 @@ public:
 	// Writes the frame as 24-bit BGR rows, top to bottom.
 	void copyToBgr24(std::uint8_t* dst, std::size_t dstStride) const;
 
+	// Fills the frame from 24-bit BGR rows of the same size, top to bottom.
+	// Each pixel pair shares the average of its two chroma values.
+	void copyFromBgr24(const std::uint8_t* src, std::size_t srcStride);
+
 private:
 	std::size_t macroOffset(int x, int y) const
 	{

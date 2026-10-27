@@ -78,6 +78,25 @@ TEST(mirror_reverses_every_pixel_of_every_row)
 	}
 }
 
+TEST(copy_from_bgr_round_trips_and_averages_chroma)
+{
+	// Pair 0: red and blue (chroma averaged); pair 1: two grays.
+	const std::uint8_t bgr[] = { 0, 0, 255, 255, 0, 0, 128, 128, 128, 200, 200, 200 };
+	FrameBuffer fb(4, 1, yuv(0, 0, 0));
+	fb.frame.copyFromBgr24(bgr, sizeof(bgr));
+	const Yuv red = rgbToYuv(rgb(255, 0, 0));
+	const Yuv blue = rgbToYuv(rgb(0, 0, 255));
+	CHECK_EQ(red.y, fb.frame.pixel(0, 0).y);
+	CHECK_EQ(blue.y, fb.frame.pixel(1, 0).y);
+	CHECK_EQ((red.u + blue.u + 1) / 2, fb.frame.pixel(0, 0).u);
+	CHECK_EQ((red.v + blue.v + 1) / 2, fb.frame.pixel(1, 0).v);
+
+	std::vector<std::uint8_t> back(sizeof(bgr));
+	fb.frame.copyToBgr24(&back[0], sizeof(bgr));
+	for (int i = 6; i < 12; ++i) // grays survive the round trip
+		CHECK(std::abs(back[i] - bgr[i]) <= 2);
+}
+
 TEST(copy_to_bgr_converts_each_pixel)
 {
 	FrameBuffer fb(2, 2, rgbToYuv(rgb(0, 0, 0)));

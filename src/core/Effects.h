@@ -141,15 +141,23 @@ public:
 	typedef std::function<void(const Yuy2Frame& shown, const Yuy2Frame& captured)> Handler;
 
 	TouchTriggerEffect(std::shared_ptr<Sprite> sprite, Handler onTouched)
-		: sprite_(sprite), onTouched_(onTouched) {}
+		: sprite_(sprite), onTouched_(onTouched), rearmFrames_(0), quietFrames_(0) {}
+
+	// After a touch, show the sprite again once nothing has been inside it for
+	// this many frames in a row, so a hand left on it does not fire again.
+	// 0 (the default) keeps it hidden until someone calls show().
+	void setRearmAfterQuietFrames(int frames) { rearmFrames_ = frames; quietFrames_ = 0; }
+
 	int stage() const { return kStageTrigger; }
-	bool needsDetection() const { return sprite_->visible(); }
+	bool needsDetection() const { return sprite_->visible() || rearmFrames_ > 0; }
 	bool needsOriginal() const { return sprite_->visible(); }
 	void apply(Yuy2Frame& frame, const FrameContext& context);
 
 private:
 	std::shared_ptr<Sprite> sprite_;
 	Handler onTouched_;
+	int rearmFrames_;
+	int quietFrames_;
 };
 
 // Paints every block white when changed, black otherwise.

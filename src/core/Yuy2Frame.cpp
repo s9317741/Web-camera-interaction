@@ -67,6 +67,26 @@ void Yuy2Frame::copyToBgr24(std::uint8_t* dst, std::size_t dstStride) const
 	}
 }
 
+void Yuy2Frame::copyFromBgr24(const std::uint8_t* src, std::size_t srcStride)
+{
+	for (int y = 0; y < height_; ++y)
+	{
+		const std::uint8_t* in = src + static_cast<std::size_t>(y) * srcStride;
+		std::uint8_t* out = data_ + static_cast<std::size_t>(y) * width_ * 2;
+		for (int x = 0; x < width_; x += 2, in += 6, out += 4)
+		{
+			const Rgb left = { in[2], in[1], in[0] };
+			const Rgb right = { in[5], in[4], in[3] };
+			const Yuv a = rgbToYuv(left);
+			const Yuv b = rgbToYuv(right);
+			out[0] = a.y;
+			out[1] = static_cast<std::uint8_t>((a.u + b.u + 1) / 2);
+			out[2] = b.y;
+			out[3] = static_cast<std::uint8_t>((a.v + b.v + 1) / 2);
+		}
+	}
+}
+
 void Yuy2Image::assign(const Yuy2Frame& source)
 {
 	bytes_.resize(source.sizeBytes());

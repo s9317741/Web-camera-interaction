@@ -185,11 +185,23 @@ void TouchToHideEffect::apply(Yuy2Frame& frame, const FrameContext& context)
 
 void TouchTriggerEffect::apply(Yuy2Frame& frame, const FrameContext& context)
 {
+	const bool touched = sprite_->overlaps(context.detection.blocks());
 	if (!sprite_->visible())
+	{
+		if (rearmFrames_ <= 0)
+			return;
+		quietFrames_ = touched ? 0 : quietFrames_ + 1;
+		if (quietFrames_ < rearmFrames_)
+			return;
+		quietFrames_ = 0;
+		sprite_->show();
+		sprite_->drawOnto(frame);
 		return;
-	if (sprite_->overlaps(context.detection.blocks()))
+	}
+	if (touched)
 	{
 		sprite_->hide();
+		quietFrames_ = 0;
 		if (onTouched_)
 			onTouched_(frame, context.original ? *context.original : frame);
 		return;

@@ -57,6 +57,11 @@ public:
 
 	Detection() : width_(0), height_(0), shift_(0), gridWidth_(0), valid_(false), gain_(1.0f) {}
 
+	// Builds a detection from a foreground mask made elsewhere (for example by
+	// a segmentation model): one byte per frame pixel, rows `stride` bytes
+	// apart, foreground where the value is at least 128.
+	static Detection fromMask(const std::uint8_t* mask, int width, int height, std::size_t stride);
+
 	// False when there was no background of the frame's size to compare with;
 	// then nothing is foreground.
 	bool valid() const { return valid_; }

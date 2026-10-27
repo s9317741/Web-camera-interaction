@@ -68,7 +68,10 @@ void EffectChain::process(Yuy2Frame& frame)
 		wantOriginal = wantOriginal || active[i]->needsOriginal();
 	}
 
-	const Detection& detection = wantDetection ? detector_.observe(frame) : noDetection_;
+	const bool useExternal = external_.valid() && external_.width() == frame.width() &&
+		external_.height() == frame.height();
+	const Detection& detection = !wantDetection ? noDetection_
+		: (useExternal ? external_ : detector_.observe(frame));
 	if (wantOriginal)
 		original_.assign(frame);
 
