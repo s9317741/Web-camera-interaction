@@ -1,68 +1,60 @@
-# Prerequisites
-*.d
+# C++Builder / RAD Studio build output (FinalOutputDir = .\$(Platform)\$(Config))
+Win32/
+Win64/
+Win64x/
+Debug/
+Release/
 
-# Compiled Object files
-*.slo
-*.lo
-*.o
-*.obj
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Linker files
-*.ilk
-
-# Debugger Files
-*.pdb
-
-# Compiled Dynamic libraries
-*.so
-*.dylib
-*.dll
-*.so.*
-
-# Fortran module files
-*.mod
-*.smod
-
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
-
-# Executables
-*.exe
-*.out
-*.app
-
-# Build directories
+# CMake build of the core tests
 build/
-Build/
-build-*/
 
-# CMake generated files
-CMakeFiles/
-CMakeCache.txt
-cmake_install.cmake
-Makefile
-install_manifest.txt
-compile_commands.json
+# Compiler / linker intermediates
+*.obj
+*.o
+*.tds
+*.map
+*.pch
+*.#*
+*.il?
+*.pdi
+*.d
+*.lib
+*.a
+*.bpi
+*.bpl
+*.dcu
+*.exe
+*.dll
 
-# Temporary files
-*.tmp
-*.log
-*.bak
-*.swp
+# IDE per-user and backup files
+*.local
+*.identcache
+*.projdata
+*.tvsconfig
+*.dsk
+*.stat
+*.~*
+__history/
+__recovery/
 
-# vcpkg
-vcpkg_installed/
+# Runtime output (recordings and screenshots use relative paths)
+*.avi
+截圖*.bmp
 
-# debug information files
-*.dwo
+# Editor / OS
+.vscode/
+.vs/
+Thumbs.db
+desktop.ini
 
-# test output & cache
-Testing/
-.cache/
+# AI agent instructions and notes (kept local)
+CLAUDE.md
+CLAUDE.local.md
+AGENTS.md
+GEMINI.md
+.claude/
+.cursor/
+.cursorrules
+GLOSSARY.md
+docs/agents/
+docs/adr/

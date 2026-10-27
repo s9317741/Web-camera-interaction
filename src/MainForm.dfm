@@ -256,7 +256,7 @@ object Form1: TForm1
           Top = 26
           Width = 132
           Height = 17
-          Caption = 'Differentce Threshold:'
+          Caption = 'Threshold (x noise):'
           Font.Charset = ANSI_CHARSET
           Font.Color = clWindowText
           Font.Height = -13
@@ -284,7 +284,7 @@ object Form1: TForm1
           Width = 89
           Height = 21
           TabOrder = 1
-          Text = '1600'
+          Text = '5'
           OnChange = edThresholdChange
         end
       end
@@ -2120,7 +2120,6 @@ object Form1: TForm1
           Height = 33
           EnabledButtons = [btPlay, btPause, btStop, btNext, btPrev]
           VisibleButtons = [btPlay, btPause, btStop, btNext, btPrev]
-          AutoOpen = True
           DoubleBuffered = True
           FileName = #20693#12364#27515#12398#12358#12392#24605#12387#12383#12398#12399'.mp3'
           ParentDoubleBuffered = False
@@ -160132,6 +160131,10 @@ object Form1: TForm1
       object akePicture1: TMenuItem
         Caption = 'TakePicture'
         OnClick = akePicture1Click
+      end
+      object miColorKeyBackground: TMenuItem
+        Caption = 'Color Key Background'
+        OnClick = miColorKeyBackgroundClick
       end
     end
   end

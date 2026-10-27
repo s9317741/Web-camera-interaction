@@ -10,7 +10,7 @@
 
 #include <Vcl.Styles.hpp>
 #include <Vcl.Themes.hpp>
-USEFORM("homework1.cpp", Form1);
+USEFORM("src\MainForm.cpp", Form1);
 //---------------------------------------------------------------------------
 int WINAPI _tWinMain(HINSTANCE, HINSTANCE, LPTSTR, int)
 {

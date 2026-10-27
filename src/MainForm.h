@@ -1,7 +1,7 @@
 //---------------------------------------------------------------------------
 
-#ifndef homework1H
-#define homework1H
+#ifndef MainFormH
+#define MainFormH
 //---------------------------------------------------------------------------
 #include <System.Classes.hpp>
 #include <Vcl.Controls.hpp>
@@ -15,6 +15,11 @@
 #include <Vcl.Graphics.hpp>
 #include <Vcl.Imaging.pngimage.hpp>
 #include <Vcl.MPlayer.hpp>
+
+#include <memory>
+
+#include "core/EffectChain.h"
+#include "core/Effects.h"
 //---------------------------------------------------------------------------
 class TForm1 : public TForm
 {
@@ -193,6 +198,7 @@ __published:	// IDE-managed Components
 	TMenuItem *miReplay;
 	TCheckBox *cbBlockDisplay;
 	TMenuItem *akePicture1;
+	TMenuItem *miColorKeyBackground;
 	TTabSheet *TabSheet1;
 	TImage *Frame1;
 	TImage *Frame2;
@@ -273,13 +279,64 @@ __published:	// IDE-managed Components
 	void __fastcall miPlayClick(TObject *Sender);
 	void __fastcall miReplayClick(TObject *Sender);
 	void __fastcall akePicture1Click(TObject *Sender);
+	void __fastcall miColorKeyBackgroundClick(TObject *Sender);
 	void __fastcall Button1Click(TObject *Sender);
 	void __fastcall Button2Click(TObject *Sender);
 	void __fastcall Button3Click(TObject *Sender);
 
 private:	// User declarations
+	// Every frame goes through FEffects; the menu items switch effects on and off.
+	webcam::EffectChain FEffects;
+	std::shared_ptr<webcam::YuvRange> FColorRange; // shared with the Y/U/V edits
+	webcam::Yuv FFillColor;
+	int FDragonBallIndex;
+	int FBackgroundIndex;
+
+	std::shared_ptr<webcam::TintEffect> FGray;
+	std::shared_ptr<webcam::TintEffect> FTint;
+	std::shared_ptr<webcam::FillRectEffect> FFillRect;
+	std::shared_ptr<webcam::SpriteEffect> FGecko;
+	std::shared_ptr<webcam::Sprite> FDragonBall;
+	std::shared_ptr<webcam::SpriteEffect> FDragonBallEffect;
+	std::shared_ptr<const webcam::Image> FDragonBallImages[7];
+	std::shared_ptr<webcam::ColorHighlightEffect> FSpecificColor;
+	std::shared_ptr<webcam::ColorHighlightEffect> FSkinColor;
+	std::shared_ptr<webcam::DifferenceViewEffect> FDifferenceView;
+	std::shared_ptr<webcam::Sprite> FGameGecko;
+	std::shared_ptr<webcam::TouchToHideEffect> FGeckoGame;
+	std::shared_ptr<const webcam::Image> FBackgroundPictures[3];
+	// The photo's virtual background: cut out by background difference, or
+	// by color range when FUseColorKey is set.
+	std::shared_ptr<webcam::ChromaKeyEffect> FColorKeyBackground;
+	std::shared_ptr<webcam::BackgroundReplaceEffect> FReplaceBackground;
+	bool FUseColorKey;
+	std::shared_ptr<webcam::Sprite> FCameraButton;
+	std::shared_ptr<webcam::TouchTriggerEffect> FPhotoTrigger;
+
+	int FFrameCounter;
+	int FVideoWidth;
+	int FVideoHeight;
+	bool FVideoIsYuy2;
+
+	void CreateCaptureWindow();
+	void DestroyCaptureWindow();
+	void RefreshVideoFormat();
+	void InstallFrameCallback();
+	void ToggleEffect(TMenuItem *item, const std::shared_ptr<webcam::Effect>& effect);
+	void SelectDifferenceView(webcam::DifferenceViewEffect::Mode mode);
+	void SelectDragonBall(int index);
+	void SelectBackgroundPicture(int index);
+	std::shared_ptr<webcam::Effect> ActiveVirtualBackground() const;
+	void WarnIfNoBackground();
+	void LoadDragonBalls();
+	void LoadBackgroundPictures();
+	void ShowLearnedBackground();
+	void SavePhoto(const webcam::Yuy2Frame& shown, const webcam::Yuy2Frame& captured);
 public:		// User declarations
 	__fastcall TForm1(TComponent* Owner);
+	__fastcall ~TForm1();
+	// Called by the capture window for every previewed frame.
+	void ProcessFrame(unsigned char *data, unsigned long size);
 };
 //---------------------------------------------------------------------------
 extern PACKAGE TForm1 *Form1;

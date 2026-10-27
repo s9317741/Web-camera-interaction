@@ -3,7 +3,7 @@
         <ProjectGuid>{1AFD1095-907B-4BBD-B290-0FB65ECDCD17}</ProjectGuid>
         <ProjectVersion>19.2</ProjectVersion>
         <FrameworkType>VCL</FrameworkType>
-        <MainSource>HW1_Project1.cpp</MainSource>
+        <MainSource>WebcamInteraction.cpp</MainSource>
         <Base>True</Base>
         <Config Condition="'$(Config)'==''">Release</Config>
         <Platform Condition="'$(Platform)'==''">Win64</Platform>
@@ -60,14 +60,14 @@
     <PropertyGroup Condition="'$(Base)'!=''">
         <_TCHARMapping>wchar_t</_TCHARMapping>
         <ProjectType>CppVCLApplication</ProjectType>
-        <ILINK_LibraryPath>..\..\..\Desktop\視窗程式作業1\;$(ILINK_LibraryPath)</ILINK_LibraryPath>
+        <ILINK_LibraryPath>src\;$(ILINK_LibraryPath)</ILINK_LibraryPath>
         <PackageImports>bindcompfmx;fmx;rtl;dbrtl;IndySystem;DbxClientDriver;bindcomp;inetdb;DBXInterBaseDriver;xmlrtl;ibxpress;DbxCommonDriver;IndyProtocols;DBXMySQLDriver;dbxcds;soaprtl;bindengine;FMXTee;CustomIPTransport;dsnap;fmxase;IndyCore;CloudService;FmxTeeUI;inet;fmxobj;inetdbxpress;fmxdae;IPIndyImpl;dbexpress;$(PackageImports)</PackageImports>
         <Multithreaded>true</Multithreaded>
         <DCC_Namespace>System;Xml;Data;Datasnap;Web;Soap;Vcl;Vcl.Imaging;Vcl.Touch;Vcl.Samples;Vcl.Shell;$(DCC_Namespace)</DCC_Namespace>
         <AllPackageLibs>rtl.lib;vcl.lib;vclimg.lib;vclx.lib</AllPackageLibs>
         <Icon_MainIcon>$(BDS)\bin\cbuilder_PROJECTICON.ico</Icon_MainIcon>
         <UsingDelphiRTL>true</UsingDelphiRTL>
-        <IncludePath>..\..\..\Desktop\視窗程式作業1\;$(IncludePath)</IncludePath>
+        <IncludePath>src\;$(IncludePath)</IncludePath>
         <DCC_CBuilderOutput>JPHNE</DCC_CBuilderOutput>
         <DynamicRTL>true</DynamicRTL>
         <UsePackages>true</UsePackages>
@@ -77,7 +77,7 @@
         <BCC_OptimizeForSpeed>true</BCC_OptimizeForSpeed>
         <BCC_ExtendedErrorInfo>true</BCC_ExtendedErrorInfo>
         <ILINK_TranslatedLibraryPath>$(BDSLIB)\$(PLATFORM)\release\$(LANGDIR);$(ILINK_TranslatedLibraryPath)</ILINK_TranslatedLibraryPath>
-        <SanitizedProjectName>HW1_Project1</SanitizedProjectName>
+        <SanitizedProjectName>WebcamInteraction</SanitizedProjectName>
         <Custom_Styles>Auric|VCLSTYLE|$(BDSCOMMONDIR)\Styles\Auric.vsf</Custom_Styles>
     </PropertyGroup>
     <PropertyGroup Condition="'$(Base_Win32)'!=''">
@@ -154,16 +154,40 @@
         <UsePackages>false</UsePackages>
     </PropertyGroup>
     <ItemGroup>
-        <CppCompile Include="homework1.cpp">
+        <CppCompile Include="src\MainForm.cpp">
             <Form>Form1</Form>
             <FormType>dfm</FormType>
-            <DependentOn>homework1.h</DependentOn>
+            <DependentOn>src\MainForm.h</DependentOn>
             <BuildOrder>1</BuildOrder>
         </CppCompile>
-        <CppCompile Include="HW1_Project1.cpp">
+        <CppCompile Include="WebcamInteraction.cpp">
             <BuildOrder>0</BuildOrder>
         </CppCompile>
-        <FormResources Include="homework1.dfm"/>
+        <FormResources Include="src\MainForm.dfm"/>
+        <CppCompile Include="src\core\ColorSpace.cpp">
+            <DependentOn>src\core\ColorSpace.h</DependentOn>
+            <BuildOrder>2</BuildOrder>
+        </CppCompile>
+        <CppCompile Include="src\core\Yuy2Frame.cpp">
+            <DependentOn>src\core\Yuy2Frame.h</DependentOn>
+            <BuildOrder>3</BuildOrder>
+        </CppCompile>
+        <CppCompile Include="src\core\ChangeDetector.cpp">
+            <DependentOn>src\core\ChangeDetector.h</DependentOn>
+            <BuildOrder>4</BuildOrder>
+        </CppCompile>
+        <CppCompile Include="src\core\Sprite.cpp">
+            <DependentOn>src\core\Sprite.h</DependentOn>
+            <BuildOrder>5</BuildOrder>
+        </CppCompile>
+        <CppCompile Include="src\core\EffectChain.cpp">
+            <DependentOn>src\core\EffectChain.h</DependentOn>
+            <BuildOrder>6</BuildOrder>
+        </CppCompile>
+        <CppCompile Include="src\core\Effects.cpp">
+            <DependentOn>src\core\Effects.h</DependentOn>
+            <BuildOrder>7</BuildOrder>
+        </CppCompile>
         <BuildConfiguration Include="Release">
             <Key>Cfg_2</Key>
             <CfgParent>Base</CfgParent>
@@ -215,7 +239,7 @@
                     <ProjectProperties Name="IndexFiles">False</ProjectProperties>
                 </ProjectProperties>
                 <Source>
-                    <Source Name="MainSource">HW1_Project1.cpp</Source>
+                    <Source Name="MainSource">WebcamInteraction.cpp</Source>
                 </Source>
                 <Excluded_Packages>
                     <Excluded_Packages Name="$(BDSBIN)\bcboffice2k270.bpl">Embarcadero C++Builder Office 2000 Servers Package</Excluded_Packages>
